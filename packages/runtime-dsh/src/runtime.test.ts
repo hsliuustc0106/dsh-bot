@@ -60,6 +60,8 @@ it("filters tools by name, route and write declaration while preserving history"
       tools: [
         read,
         { ...read, name: "shell", readOnly: true },
+        { ...read, name: "write_file", readOnly: false },
+        { ...read, name: "run_tests", readOnly: true },
         { ...read, name: "list_files", route: { connectorId: "connector", toolName: "read_file" } },
         { ...read, name: "list_files", readOnly: false },
       ],

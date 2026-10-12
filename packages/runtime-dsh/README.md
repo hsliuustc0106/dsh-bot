@@ -43,5 +43,5 @@ imported as closed, role-preserving text events; only new tool requests reach
 Rakazo’s executor. The initial runtime exposes `read_file` and `list_files` only.
 Regenerate the JavaScript boundary declarations with `pnpm --filter @rakazo/runtime-dsh generate:types` after changing their source, then format with Biome.
 
-The executor durably claims non-replayable runs before starting DSH and records tool metadata before dispatch. Shutdown joins callbacks for a bounded grace period, then records unresolved outcomes as uncertain. Killing DSH is not proof that an external tool stopped. The controlled pilot follows in PR 5. No conversation migration, resume, native subagents, shared daemon,
+The executor durably claims non-replayable runs before starting DSH and records tool metadata before dispatch. Shutdown joins callbacks for a bounded grace period, then records unresolved outcomes as uncertain. Killing DSH is not proof that an external tool stopped. The controlled pilot is documented in [the pilot guide](../../docs/runtime-pilot.md). Offline fixtures pass; live comparison remains pending. No conversation migration, resume, native subagents, shared daemon,
 or mid-run fallback is implemented.

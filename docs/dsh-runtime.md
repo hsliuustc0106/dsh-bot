@@ -65,6 +65,8 @@ Pi; this pilot must be configured in the source worker environment.
 
 ## Verify and compare
 
+The [controlled pilot](./runtime-pilot.md) runs three paired tasks and produces a comparison report. Its offline gate passes; live model results are still pending.
+
 The default tests exercise the subprocess protocol without downloading DSH or
 calling a hosted model:
 
