@@ -148,3 +148,55 @@ describe("versioned DSH bridge", () => {
     }
   });
 });
+
+it.each(["cancel", "crash"])(
+  "records an unsettled tool after %s and accepts a late result without redispatch",
+  async (method) => {
+    const controller = new AbortController();
+    let release!: (value: string) => void;
+    let started!: () => void;
+    const began = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const result = new Promise<string>((resolve) => {
+      release = resolve;
+    });
+    let signal: AbortSignal | undefined;
+    const executeTool = vi.fn(async (_call, toolSignal: AbortSignal) => {
+      signal = toolSignal;
+      started();
+      return result;
+    });
+    const uncertain = vi.fn(async () => undefined);
+    const events: DshEvent[] = [];
+    const work = new DshBridge({ cliPath, toolSettlementGraceMs: 20 }).run(
+      task(method === "crash" ? "crash-tool" : "echo"),
+      {
+        signal: controller.signal,
+        onEvent: (event) => {
+          events.push(event);
+        },
+        executeTool,
+        onUncertainTool: uncertain,
+      },
+    );
+    // Attach the rejection handler before the child can exit.
+    const settled = work.then(
+      (value) => ({ value }),
+      (error) => ({ error }),
+    );
+    await began;
+    if (method === "cancel") controller.abort();
+    const outcome = await settled;
+    if (method === "cancel") expect(outcome).toEqual({ value: "cancelled" });
+    else expect(outcome).toMatchObject({ error: { code: "CRASH" } });
+    expect(signal?.aborted).toBe(true);
+    expect(uncertain).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: "tool", callId: "echo-1" }),
+    );
+    expect(events.some((event) => event.type === "done")).toBe(false);
+    release("late known result");
+    await result;
+    expect(executeTool).toHaveBeenCalledOnce();
+  },
+);

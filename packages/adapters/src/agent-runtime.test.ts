@@ -24,6 +24,7 @@ vi.mock("./pi-runtime.js", () => ({
 beforeEach(() => vi.clearAllMocks());
 const dsh = () =>
   ({
+    executionPolicy: () => ({ id: "dsh", replay: "never" as const }),
     describe: () => ({
       id: "dsh",
       contractVersion: "1",
@@ -93,6 +94,8 @@ describe("shared runtime selection", () => {
     });
     const constructDsh = vi.fn(() => implementation);
     const runtime = createAgentRuntime(options, constructDsh);
+    expect(runtime.executionPolicy?.({ botId: "pilot" })).toEqual({ id: "dsh", replay: "never" });
+    expect(runtime.executionPolicy?.({ botId: "other" })).toBeUndefined();
     const request = { botId: "pilot", runId: "run" } as AgentRunRequest;
     runtime.run(request);
     runtime.run({ ...request, botId: "other" });

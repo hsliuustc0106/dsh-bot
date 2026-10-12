@@ -35,6 +35,7 @@ function fakePrisma(
 ) {
   return {
     run: { findMany: vi.fn(async () => runs) },
+    externalEffect: { updateMany: vi.fn(async () => ({ count: 0 })) },
     routine: { findMany: vi.fn(async () => routines) },
     computer: { findMany: vi.fn(async () => controls) },
     messagingOutbound: { findFirst: vi.fn(async () => null) },

@@ -118,7 +118,7 @@ for (const harness of ["pi", "dsh"] as const) {
         });
         try {
           const executeTool = vi.fn().mockResolvedValue({ content: "example data" });
-          if (scenario === "denied") executeTool.mockRejectedValue(new Error("Permission denied"));
+          if (scenario === "denied") executeTool.mockResolvedValue({ error: "Permission denied" });
           const onUsage = vi.fn();
           const runtime =
             harness === "dsh" ? new DshAgentRuntime({ cliPath: cliPath! }) : new PiAgentRuntime();

@@ -32,7 +32,7 @@ reasoning effort to DSH. No separate model credential environment variables are
 required. This initial adapter uses DSH's native DeepSeek **Messages** protocol;
 a custom endpoint must support that protocol, not just Chat Completions.
 
-Before switching back to `AGENT_RUNTIME=pi`, stop new pilot work and settle all DSH runs. Durable rollback protection is not implemented yet; do not requeue unfinished DSH work through Pi. Missing pilot
+Apply database migrations before enabling DSH. To roll back, stop new pilot work, cancel or settle active runs, set `AGENT_RUNTIME=pi`, and restart both services. A durable no-replay marker prevents an unfinished DSH run from being resumed through either runtime; verify unresolved actions before explicitly creating a new run. Missing pilot
 configuration or an unknown runtime prevents worker startup instead of silently
 changing execution behavior. The stock Compose configurations explicitly select
 Pi; this pilot must be configured in the source worker environment.
@@ -57,8 +57,7 @@ Pi; this pilot must be configured in the source worker environment.
 - Streamed text and tool activity use existing Rakazo runtime events. Executor
   denials remain failures; approval pauses stop the loop. Cancellation via the
   runtime, upstream signal, or consumer closing the stream stops DSH, with a
-  bounded process-termination fallback. In-flight Rakazo tools retain the
-  executor's cancellation and permission checks.
+  bounded process-termination fallback. Tool signals combine runtime cancellation with the executor’s lease signal. The bridge waits up to five seconds for dispatched tools to settle; remaining calls are recorded as uncertain. Metadata is persisted before dispatch, and confirmed late results can settle that uncertainty without replay. Recovery also marks unresolved calls uncertain after a worker dies. No raw arguments or results are stored in this ledger.
 - Usage is recorded per model attempt through the awaited producer callback,
   including usage delivered during graceful cancellation. Missing costs remain
   unknown rather than zero. Hard termination can lose provider usage that has

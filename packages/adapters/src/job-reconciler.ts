@@ -7,6 +7,7 @@ import { getLogger } from "@rakazo/logging";
 import type { PoolClient } from "pg";
 import { returnBotMessageOutcome } from "./bot-messages.js";
 import { scheduleComputerControlExpiry } from "./computer-control.js";
+import { reconcileRuntimeToolOutcomes } from "./runtime-safety.js";
 import { reconcileStuckWork } from "./stuck-work.js";
 import { isLoopGuardStopText } from "./tool-loop.js";
 import { isUserProgressClientNonce } from "./user-progress.js";
@@ -135,6 +136,11 @@ export function createJobReconciler(
       }
 
       const now = new Date();
+      try {
+        await reconcileRuntimeToolOutcomes(deps.prisma, now);
+      } catch (error) {
+        getLogger().error("runtime tool reconciliation", error);
+      }
       try {
         stuckCursor = await reconcileStuckWork({
           prisma: deps.prisma,

@@ -66,6 +66,8 @@ export function createAgentRuntime(
   const piDescription = pi.describe();
   const dshDescription = dsh.describe();
   return {
+    executionPolicy: (request) =>
+      request.botId === config.botId ? dsh.executionPolicy?.(request) : undefined,
     describe: () => ({
       id: "pi+dsh",
       contractVersion: "1",

@@ -113,6 +113,8 @@ it.skipIf(!cliPath)(
         "read_file",
         { path: "README.md" },
         expect.stringMatching(/^second:dsh:/),
+        undefined,
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
       expect(onUsage).toHaveBeenCalledTimes(3);
       expect(bodies).toHaveLength(3);

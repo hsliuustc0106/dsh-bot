@@ -315,6 +315,12 @@ import {
   secretPausedToolResult,
   tryCompleteConnectionWithCode,
 } from "./run-secret.js";
+import {
+  claimFreshRuntime,
+  markInterruptedRuntimeTools,
+  RUNTIME_RECONCILIATION_MESSAGE,
+  runtimeToolLedger,
+} from "./runtime-safety.js";
 import { withRuntimeCleanup } from "./runtime-stream.js";
 import {
   cancelScheduleFromTool,
@@ -3294,6 +3300,25 @@ export function createRunExecutor(deps: ExecutorDeps) {
         data: { status: "running", startedAt: current.startedAt ?? new Date() },
       });
       if (started.count !== 1) return;
+      if (current.runtimeNoReplay) {
+        const interruptedAttempt = await deps.prisma.attempt.create({
+          data: { runId, fence, status: "running" },
+        });
+        await markInterruptedRuntimeTools(deps.prisma, runId);
+        await deps.events.finalizeRun({
+          spaceId: run.spaceId,
+          threadId: run.threadId,
+          botId: run.botId,
+          runId,
+          taskId: run.taskId,
+          attemptId: interruptedAttempt.id,
+          leaseOwner: workerId,
+          leaseFence: fence,
+          outcome: "failed",
+          error: RUNTIME_RECONCILIATION_MESSAGE,
+        });
+        return;
+      }
       const leaseTarget = await deps.prisma.bot.findUniqueOrThrow({
         where: { id: run.botId },
         select: { computerId: true, computerSwitching: true },
@@ -4045,6 +4070,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
           return occurrence;
         };
 
+        const runToolContext = context;
         const applyTool = async (
           name: string,
           args: Record<string, unknown>,
@@ -4052,6 +4078,12 @@ export function createRunExecutor(deps: ExecutorDeps) {
           _route?: unknown,
           observer?: AgentToolExecutionObserver,
         ) => {
+          const context = observer?.signal
+            ? {
+                ...runToolContext,
+                signal: AbortSignal.any([runToolContext.signal, observer.signal]),
+              }
+            : runToolContext;
           context.signal.throwIfAborted();
           if (handedOff) {
             return {
@@ -6487,6 +6519,14 @@ export function createRunExecutor(deps: ExecutorDeps) {
         );
 
         try {
+          const runtimePolicy = deps.runtime.executionPolicy?.({ botId: bot.id });
+          if (runtimePolicy?.replay === "never") {
+            await claimFreshRuntime(deps.prisma, { runId, workerId, fence }, runtimePolicy.id);
+          }
+          const toolLedger =
+            runtimePolicy?.replay === "never"
+              ? runtimeToolLedger(deps.prisma, { runId, spaceId: run.spaceId }, applyTool)
+              : undefined;
           const runtimeEvents = deps.runtime.run(
             {
               botId: bot.id,
@@ -6598,7 +6638,8 @@ export function createRunExecutor(deps: ExecutorDeps) {
               script,
               allowSilentEmpty: allowSilentEmptyRun,
               emptyResponseText,
-              executeTool: scripted ? undefined : applyTool,
+              executeTool: scripted ? undefined : (toolLedger?.executeTool ?? applyTool),
+              onToolUncertain: toolLedger?.onToolUncertain,
               resolveModel: scripted
                 ? undefined
                 : (provider, modelId) =>
