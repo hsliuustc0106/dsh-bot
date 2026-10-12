@@ -98,6 +98,9 @@ in [the runtime guide](./dsh-runtime.md): disable new DSH work and settle or can
 active work. Durable run markers prevent unfinished DSH runs from replaying through
 Pi or DSH. Verify uncertain tool outcomes before explicitly starting fresh work.
 
-Remaining gates: a live model comparison, PostgreSQL migration/product-journey
-validation, and CI plus automated review on the stacked PRs. No deployment or
+Database validation passed in a temporary PostgreSQL instance: all migrations
+applied, and a product journey verified two turns, actual sandbox routing,
+disabled tools, durable tool metadata and rollback refusal.
+
+Remaining gates: a live model comparison and CI plus automated review on the stacked PRs. No deployment or
 merge is implied by passing this offline pilot.
