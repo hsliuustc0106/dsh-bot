@@ -7,10 +7,12 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "generate:types": "node scripts/generate-types.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --root ../.. packages/runtime-dsh/src"
   },
   "dependencies": {
+    "@rakazo/adapter-kit": "workspace:*",
     "zod": "4.6.2"
   },
   "devDependencies": {

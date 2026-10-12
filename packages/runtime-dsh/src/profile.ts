@@ -1,19 +1,19 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DSH_VERSION } from "./protocol.mjs";
 
-export async function validateDshInstallation(cliPath: string): Promise<string> {
+export function validateDshInstallation(cliPath: string): string {
   if (!isAbsolute(cliPath)) throw new Error("DSH_CLI_PATH must be absolute");
   try {
-    const path = await realpath(cliPath);
+    const path = realpathSync(cliPath);
     const root = dirname(dirname(path));
-    const manifest = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
     if (
       manifest.name !== "@deepseek-ai/dsh" ||
       manifest.version !== DSH_VERSION ||
       path !== join(root, "lib", "bin.js") ||
-      !(await stat(path)).isFile()
+      !statSync(path).isFile()
     )
       throw new Error();
     return path;

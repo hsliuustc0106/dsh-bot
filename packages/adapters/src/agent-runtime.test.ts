@@ -82,7 +82,7 @@ describe("shared runtime selection", () => {
     ).toThrow("absolute DSH_CLI_PATH");
     expect(() =>
       createAgentRuntime({ kind: "dsh", dsh: { cliPath: "/opt/dsh/bin.js", botId: "bot" } }),
-    ).toThrow("unavailable");
+    ).toThrow("0.2.1-alpha.2");
   });
   it("routes only selected bots to DSH, reports conservative capabilities, and cancels both runtimes", async () => {
     const implementation = dsh();

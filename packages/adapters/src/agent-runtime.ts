@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import type { AgentRuntime } from "@rakazo/adapter-kit";
+import { DshAgentRuntime } from "@rakazo/runtime-dsh";
 import { PiAgentRuntime } from "./pi-runtime.js";
 import { piSessionsRoot } from "./pi-session.js";
 import { ScriptedAgentRuntime } from "./scripted-runtime.js";
@@ -46,11 +47,12 @@ function validateDshOptions(
     throw new Error("DSH requires an absolute DSH_CLI_PATH");
 }
 
-/** One selection boundary for the API and worker. External runtimes are injected
- * by the composition root; a missing DSH implementation must never select Pi. */
+/** One selection boundary for the API and worker. DSH validates its installation
+ * at startup; a missing or incompatible installation never selects Pi. */
 export function createAgentRuntime(
   options: AgentRuntimeOptions = {},
-  createDsh?: (options: NonNullable<AgentRuntimeOptions["dsh"]>) => AgentRuntime,
+  createDsh: (options: NonNullable<AgentRuntimeOptions["dsh"]>) => AgentRuntime = (config) =>
+    new DshAgentRuntime({ cliPath: config.cliPath }),
 ): AgentRuntime {
   const kind = resolveAgentRuntimeKind(options.kind);
   if (kind === "scripted") return new ScriptedAgentRuntime();
@@ -60,7 +62,6 @@ export function createAgentRuntime(
   });
   if (kind === "pi") return pi;
   const config = options.dsh!;
-  if (!createDsh) throw new Error("DSH runtime is unavailable in this build");
   const dsh = createDsh(config);
   const piDescription = pi.describe();
   const dshDescription = dsh.describe();

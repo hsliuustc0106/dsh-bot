@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { frames } from "./frames.mjs";
+import { historySeed, systemInstructions } from "./history.mjs";
 import { DSH_VERSION, hostMessage, MAX_FRAME_BYTES, PROTOCOL_VERSION } from "./protocol.mjs";
 
 export const name = "rakazo-dsh-bridge";
@@ -73,6 +74,7 @@ export function apply(ctx) {
     if (new Set(task.tools.map((tool) => tool.name)).size !== task.tools.length) throw new Error();
     handle = await ctx.agents.create({
       sessionId,
+      seed: historySeed(task.history, sessionId),
       agentOptions: {
         provider: "deepseek-official",
         model: task.model.id,
@@ -83,7 +85,7 @@ export function apply(ctx) {
         agentCtx.systemPrompt.section({
           name: "rakazo",
           order: 0,
-          text: task.instructions,
+          text: systemInstructions(task.instructions, task.history),
           complete: true,
           interpolate: false,
         });

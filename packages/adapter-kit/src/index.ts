@@ -3,4 +3,5 @@ export * from "./cloud-agents.js";
 export * from "./interfaces.js";
 export * from "./registry.js";
 export * from "./secret-errors.js";
+export * from "./tool-results.js";
 export * from "./types.js";

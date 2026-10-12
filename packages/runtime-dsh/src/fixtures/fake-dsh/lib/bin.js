@@ -52,6 +52,8 @@ input.on("line", (line) => {
         type: "text",
         text: JSON.stringify({
           home: process.env.DSH_HOME,
+          history: request.history,
+          tools: request.tools,
           inherited: ["DATABASE_URL", "NODE_OPTIONS", "HTTPS_PROXY"].some(
             (key) => process.env[key] !== undefined,
           ),
@@ -64,6 +66,10 @@ input.on("line", (line) => {
       return;
     }
     if (request.prompt === "wait") return;
+    if (request.prompt === "read") {
+      send({ type: "tool", callId: "read-1", name: "read_file", args: { path: "README.md" } });
+      return;
+    }
     if (request.prompt === "unknown") {
       tool("shell-1", "shell");
       return;

@@ -142,9 +142,7 @@ describe("versioned DSH bridge", () => {
         join(root, "package.json"),
         JSON.stringify({ name: "@deepseek-ai/dsh", version: "0.0.0" }),
       );
-      await expect(validateDshInstallation(join(root, "lib", "bin.js"))).rejects.toThrow(
-        "0.2.1-alpha.2",
-      );
+      expect(() => validateDshInstallation(join(root, "lib", "bin.js"))).toThrow("0.2.1-alpha.2");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
