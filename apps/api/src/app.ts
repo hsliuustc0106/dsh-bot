@@ -23,6 +23,7 @@ import {
   ChatSdkMessagingSurface,
   CodexCatalogCache,
   ComposioConnector,
+  createAgentRuntime,
   createBackgroundJobHandlers,
   createCloudAgentConnection,
   createConnectorStack,
@@ -53,16 +54,13 @@ import {
   McpConnector,
   McpOAuthBroker,
   messagingPlatformsFromEnv,
-  PiAgentRuntime,
   PiOAuthLogins,
   PipedreamConnector,
   PostgresRealtimeFanout,
   pipedreamConfigFromEnv,
-  piSessionsRoot,
   reconcileCloudAgents,
   reconcileComputerUpdates,
   removePiUserSessions,
-  ScriptedAgentRuntime,
   SmtpEmailProvider,
   SpaceMemoryProviderResolver,
   StripeBillingProvider,
@@ -382,11 +380,12 @@ export async function createApp(
   integrationSettings.warmDirectories();
   const runtime =
     runtimeOverride ??
-    (env.agentRuntime === "scripted"
-      ? new ScriptedAgentRuntime()
-      : new PiAgentRuntime({
-          sessionRoot: env.piSessionRecording ? piSessionsRoot(env.dataDir) : undefined,
-        }));
+    createAgentRuntime({
+      ...env.agentRuntimeOptions,
+      kind: env.agentRuntime,
+      dataDir: env.dataDir,
+      recordPiSessions: env.piSessionRecording,
+    });
   const notifications = new ExpoPushProvider(env.dataDir, (sessionId) =>
     pushSessionExpiresAt(prisma, sessionId),
   );
