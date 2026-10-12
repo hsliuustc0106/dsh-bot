@@ -7,6 +7,21 @@ const base = {
 };
 
 describe("loadEnv", () => {
+  it("shares strict runtime selection and DSH configuration with the worker", () => {
+    expect(() => loadEnv({ ...base, AGENT_RUNTIME: "unknown" })).toThrow("Unknown AGENT_RUNTIME");
+    expect(() => loadEnv({ ...base, AGENT_RUNTIME: "dsh" })).toThrow("AGENT_RUNTIME_BOT_ID");
+    expect(
+      loadEnv({
+        ...base,
+        AGENT_RUNTIME: "dsh",
+        AGENT_RUNTIME_BOT_ID: "pilot",
+        DSH_CLI_PATH: "/opt/dsh/bin.js",
+      }),
+    ).toMatchObject({
+      agentRuntime: "dsh",
+      agentRuntimeOptions: { kind: "dsh", dsh: { botId: "pilot", cliPath: "/opt/dsh/bin.js" } },
+    });
+  });
   it("keeps the ticket board off unless explicitly enabled", () => {
     expect(loadEnv(base).ticketBoardEnabled).toBe(false);
     for (const value of ["false", "1", ""])
