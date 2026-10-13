@@ -110,3 +110,60 @@ describe("shared runtime selection", () => {
     expect(calls.abortPi).toHaveBeenCalledWith("run");
   });
 });
+
+describe("JiuwenSwarm selection", () => {
+  const environment = {
+    AGENT_RUNTIME: "jiuwenswarm",
+    AGENT_RUNTIME_BOT_ID: "pilot",
+    JIUWENSWARM_PYTHON_PATH: "/opt/jiuwen/venv/bin/python",
+    JIUWENSWARM_SOURCE_DIR: "/opt/jiuwen/source",
+  };
+  it("validates configuration before construction", () => {
+    expect(() => agentRuntimeOptionsFromEnv({ AGENT_RUNTIME: "jiuwenswarm" })).toThrow(
+      "AGENT_RUNTIME_BOT_ID",
+    );
+    expect(() =>
+      agentRuntimeOptionsFromEnv({ ...environment, JIUWENSWARM_PYTHON_PATH: "python" }),
+    ).toThrow("absolute");
+    expect(() => createAgentRuntime({ kind: "jiuwenswarm" })).toThrow("AGENT_RUNTIME_BOT_ID");
+    expect(calls.constructPi).not.toHaveBeenCalled();
+  });
+  it("routes only the selected bot, preserving runtime identity and cancellation", async () => {
+    const implementation = {
+      ...dsh(),
+      describe: () => ({
+        ...dsh().describe(),
+        id: "jiuwenswarm",
+        capabilities: { streaming: true, tools: false, compaction: false, scripted: false },
+      }),
+    };
+    const createDsh = vi.fn();
+    const createJiuwen = vi.fn(() => implementation);
+    const options = agentRuntimeOptionsFromEnv(environment);
+    const runtime = createAgentRuntime(options, createDsh, createJiuwen);
+    const request = { botId: "pilot", runId: "run" } as AgentRunRequest;
+    runtime.run(request);
+    runtime.run({ ...request, botId: "other" });
+    expect(createDsh).not.toHaveBeenCalled();
+    expect(createJiuwen).toHaveBeenCalledExactlyOnceWith(options.jiuwenswarm);
+    expect(implementation.run).toHaveBeenCalledExactlyOnceWith(request, undefined);
+    expect(calls.runPi).toHaveBeenCalledExactlyOnceWith({ ...request, botId: "other" }, undefined);
+    expect(runtime.describe(request).id).toBe("jiuwenswarm");
+    expect(runtime.describe()).toMatchObject({
+      id: "pi+jiuwenswarm",
+      capabilities: { tools: false },
+    });
+    await runtime.abort("run");
+    expect(implementation.abort).toHaveBeenCalledWith("run");
+    expect(calls.abortPi).toHaveBeenCalledWith("run");
+  });
+  it("does not fall back when startup fails", () => {
+    const construct = vi.fn(() => {
+      throw new Error("installation unavailable");
+    });
+    expect(() =>
+      createAgentRuntime(agentRuntimeOptionsFromEnv(environment), vi.fn(), construct),
+    ).toThrow("installation unavailable");
+    expect(calls.runPi).not.toHaveBeenCalled();
+  });
+});

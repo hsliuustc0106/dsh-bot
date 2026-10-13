@@ -315,6 +315,7 @@ import {
   secretPausedToolResult,
   tryCompleteConnectionWithCode,
 } from "./run-secret.js";
+import { recordRuntimeIdentity } from "./runtime-identity.js";
 import { withRuntimeCleanup } from "./runtime-stream.js";
 import {
   cancelScheduleFromTool,
@@ -6487,6 +6488,12 @@ export function createRunExecutor(deps: ExecutorDeps) {
         );
 
         try {
+          await recordRuntimeIdentity(deps.prisma, deps.runtime, {
+            runId,
+            botId: bot.id,
+            workerId,
+            fence,
+          });
           const runtimeEvents = deps.runtime.run(
             {
               botId: bot.id,
