@@ -14,7 +14,13 @@ The opt-in runner executes one model against three shared tasks:
 | Small change and tests | Correct settings and passing fixed tests after the final write | Edit settings JSON, run fixed tests |
 
 Each run gets the same initial files, instructions, tools, model ID, output limit,
-reasoning setting and budgets. Ordering alternates between harnesses. Pi uses
+reasoning setting and budgets. A private loopback transport verifies the serialized
+thinking controls before forwarding: Pi sends `reasoning_effort: "none"` and DSH
+sends `thinking: { "type": "disabled" }`. The pilot derives Pi's compatible
+reasoning capability even when the input model omits it. These controls are
+[documented equivalents for DeepSeek](https://api-docs.deepseek.com/api/create-chat-completion/);
+endpoints must implement that contract. Unverified requests fail before dispatch.
+Ordering alternates between harnesses. Pi uses
 Chat Completions and DSH uses Messages; protocol serialization and provider cache
 behavior differ. One trial per task is a smoke pilot, not a statistically reliable
 benchmark. The JSON-change task does not establish arbitrary coding ability.
@@ -22,7 +28,8 @@ benchmark. The JSON-change task does not establish arbitrary coding ability.
 The report contains answers for manual review, an automated correctness rubric,
 denied actions, human interventions (zero: there is no human-in-the-loop step),
 latency, token usage and cost estimates when supplied pricing is available.
-Unknown costs remain null. Offline token counts come from a scripted emulator;
+Unknown cache counters remain null across calls. Costs remain null whenever a
+component with a nonzero price is unknown. Offline token counts come from a scripted emulator;
 offline timings measure fixture execution, not hosted-model performance.
 
 ## Offline gate
@@ -69,10 +76,13 @@ respective protocols. Values below are fake placeholders, not working endpoints:
 
 Optional `pricing` contains `inputPerMillion`, `outputPerMillion`,
 `cacheReadPerMillion` and `cacheWritePerMillion`, all in USD. Use verified rates
-for the selected model. Costs are estimates, not provider invoices. Token/call
-budgets stop after observed usage and may overshoot by one in-flight request;
-they are not a hard dollar cap. Set a provider-side spending cap when a hard
-limit is required.
+for the selected model. Costs are estimates, not provider invoices. Model-call
+limits are enforced before every outbound HTTP attempt, so a final response at
+the call limit is accepted and attempt N+1 never reaches the provider. Token
+limits accept exact equality, stop further requests at exhaustion, and may
+overshoot by one response because usage arrives afterward. Unknown cache usage
+cannot be bounded. These are not a hard dollar cap. Set a provider-side spending
+cap when a hard limit is required.
 
 ```bash
 pnpm exec tsx packages/testkit/src/cli/runtime-pilot.ts \
@@ -100,7 +110,8 @@ Pi or DSH. Verify uncertain tool outcomes before explicitly starting fresh work.
 
 Database validation passed in a temporary PostgreSQL instance: all migrations
 applied, and a product journey verified two turns, actual sandbox routing,
-disabled tools, durable tool metadata and rollback refusal.
+disabled tools, durable tool metadata and rollback refusal. A follow-up sent during
+an active DSH run is consumed by one continuation, with no third run queued.
 
 Remaining gates: a live model comparison and CI plus automated review on the stacked PRs. No deployment or
 merge is implied by passing this offline pilot.

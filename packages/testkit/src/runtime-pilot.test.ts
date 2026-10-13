@@ -1,6 +1,12 @@
 import type { AgentRunRequest, AgentRuntime, AgentRuntimeEvent } from "@rakazo/adapter-kit";
 import { describe, expect, it, vi } from "vitest";
-import { defaultPilotBudget, pilotTasks, runPilotTask } from "./runtime-pilot.js";
+import {
+  defaultPilotBudget,
+  estimatePilotCost,
+  pilotTasks,
+  runPilotTask,
+} from "./runtime-pilot.js";
+import { startPilotEmulator } from "./runtime-pilot-emulator.js";
 
 function runtime(work: (request: AgentRunRequest) => Promise<string>): AgentRuntime {
   return {
@@ -17,7 +23,12 @@ function runtime(work: (request: AgentRunRequest) => Promise<string>): AgentRunt
     abort: vi.fn(async () => undefined),
   };
 }
-const model = { provider: "fixture", id: "fixture-model", apiKey: "test-placeholder" };
+const model = {
+  provider: "openai-compatible",
+  id: "fixture-model",
+  apiKey: "test-placeholder",
+  baseUrl: "http://127.0.0.1:1",
+};
 describe("controlled pilot workspace", () => {
   it("denies paths, executable writes and tool routes before side effects", async () => {
     const result = await runPilotTask({
@@ -94,3 +105,65 @@ describe("controlled pilot workspace", () => {
     expect(JSON.stringify(result)).not.toContain("test-placeholder");
   });
 });
+
+it.each(["cacheReadTokens", "cacheWriteTokens"] as const)(
+  "preserves unknown %s when pricing",
+  async (field) => {
+    const server = await startPilotEmulator({ answerOnly: true });
+    try {
+      for (const cache of [undefined, null, 0]) {
+        const measured = runtime(async (request) => {
+          for (const value of [cache, 0]) {
+            const response = await fetch(`${request.model.baseUrl}/v1/chat/completions`, {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${request.model.apiKey}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                model: request.model.id,
+                messages: [],
+                stream: true,
+                reasoning_effort: "none",
+              }),
+            });
+            expect(response.ok).toBe(true);
+            await response.text();
+            await request.onUsage!({
+              type: "usage",
+              provider: "fixture",
+              model: "fixture-model",
+              operationKind: "answer",
+              callId: "call",
+              inputTokens: 100,
+              outputTokens: 10,
+              cacheReadTokens: 0,
+              cacheWriteTokens: 0,
+              [field]: value,
+              costUsd: null,
+            });
+          }
+          return "CACHE_TTL_SECONDS defaults to 120 seconds, README.md:3";
+        });
+        const row = await runPilotTask({
+          harness: "test",
+          runtime: measured,
+          model: { ...model, baseUrl: server.baseUrl },
+          task: pilotTasks[0]!,
+        });
+        expect(row[field]).toBe(cache === 0 ? 0 : null);
+        expect(row.modelCalls).toBe(2);
+        const cost = estimatePilotCost(row, {
+          inputPerMillion: 1,
+          outputPerMillion: 2,
+          cacheReadPerMillion: 3,
+          cacheWritePerMillion: 4,
+        });
+        if (cache === 0) expect(cost).toBeCloseTo(0.00024);
+        else expect(cost).toBeNull();
+      }
+    } finally {
+      await server.close();
+    }
+  },
+);

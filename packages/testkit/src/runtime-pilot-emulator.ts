@@ -2,11 +2,13 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 /** Deliberately scripted model: validates driver wiring, never measures model quality. */
-export async function startPilotEmulator() {
+export async function startPilotEmulator(options: { answerOnly?: boolean } = {}) {
+  const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    requests.push({ path: request.url!, body });
     const text = JSON.stringify(body.messages);
     const task = text.includes("Change settings.json so")
       ? "change"
@@ -35,7 +37,7 @@ export async function startPilotEmulator() {
         { name: "run_tests", args: {} },
       ],
     };
-    const call = plans[task][results.length];
+    const call = options.answerOnly ? undefined : plans[task][results.length];
     const answer =
       task === "answer"
         ? "CACHE_TTL_SECONDS defaults to 120 seconds (README.md:3-4)."
@@ -102,6 +104,7 @@ export async function startPilotEmulator() {
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return {
+    requests,
     baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     close: async () => {
       server.closeAllConnections();

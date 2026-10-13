@@ -11,6 +11,8 @@ import type {
   ConnectorTool,
 } from "@rakazo/adapter-kit";
 
+import { startPilotTransport } from "./runtime-pilot-transport.js";
+
 const exec = promisify(execFile);
 export type PilotTaskId = "repository-answer" | "read-only-review" | "configuration-change";
 export const pilotTasks: ReadonlyArray<{ id: PilotTaskId; prompt: string }> = [
@@ -106,8 +108,8 @@ export interface PilotResult {
   latencyMs: number;
   inputTokens: number | null;
   outputTokens: number | null;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
   costUsd: number | null;
   budgetExceeded: boolean;
   testsPassed: boolean;
@@ -127,6 +129,12 @@ export async function runPilotTask(options: {
     const value = budget[key];
     if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Invalid pilot budget");
   }
+  if (
+    !options.model.baseUrl ||
+    !options.model.apiKey ||
+    (options.model.provider !== "openai-compatible" && options.model.provider !== "deepseek")
+  )
+    throw new Error("A supported pilot protocol and explicit connection are required");
   const root = await mkdtemp(join(tmpdir(), "rakazo-runtime-pilot-"));
   const controller = new AbortController();
   const began = performance.now();
@@ -158,6 +166,14 @@ export async function runPilotTask(options: {
   };
   const timer = setTimeout(exceeded, budget.timeoutMs);
   let answer = "";
+  let dispatchedCalls = 0;
+  let observedCalls = 0;
+  let transport: Awaited<ReturnType<typeof startPilotTransport>> | undefined;
+  const measuredTokens = () =>
+    (result.inputTokens ?? budget.maxTokens) +
+    (result.outputTokens ?? budget.maxTokens) +
+    (result.cacheReadTokens ?? 0) +
+    (result.cacheWriteTokens ?? 0);
   const allowed = new Set(
     (options.task.id === "configuration-change" ? [...readTools, ...writeTools] : readTools).map(
       (tool) => tool.name,
@@ -235,6 +251,21 @@ export async function runPilotTask(options: {
       result.testsPassed = false;
       return { ok: true };
     };
+    transport = await startPilotTransport({
+      protocol: options.model.provider === "deepseek" ? "messages" : "chat",
+      baseUrl: options.model.baseUrl,
+      apiKey: options.model.apiKey,
+      modelId: options.model.id,
+      signal: controller.signal,
+      beforeDispatch: () => {
+        if (dispatchedCalls >= budget.maxModelCalls || measuredTokens() >= budget.maxTokens) {
+          exceeded();
+          throw new Error("Model budget exceeded");
+        }
+        dispatchedCalls++;
+        result.modelCalls = dispatchedCalls;
+      },
+    });
     const request: AgentRunRequest = {
       botId: "pilot",
       threadId: "pilot",
@@ -246,13 +277,21 @@ export async function runPilotTask(options: {
       tools: options.task.id === "configuration-change" ? [...readTools, ...writeTools] : readTools,
       model: {
         ...options.model,
+        baseUrl: transport.baseUrl,
+        apiKey: transport.apiKey,
         maxTokens: options.model.maxTokens ?? 1024,
         contextWindow: options.model.contextWindow ?? 16384,
+        // This pilot targets DeepSeek's two protocols, including its standard
+        // reasoning_effort=none control on Chat Completions.
+        reasoning: true,
         thinkingLevel: "off",
       },
       executeTool,
       onUsage: (event) => {
-        result.modelCalls++;
+        // A locally rejected request can produce an unknown-usage error event
+        // in Pi. It never reached the provider and is not another paid attempt.
+        if (observedCalls >= dispatchedCalls) return;
+        observedCalls++;
         result.inputTokens =
           result.inputTokens === null || event.inputTokens === null
             ? null
@@ -261,18 +300,11 @@ export async function runPilotTask(options: {
           result.outputTokens === null || event.outputTokens === null
             ? null
             : result.outputTokens + event.outputTokens;
-        result.cacheReadTokens += event.cacheReadTokens ?? 0;
-        result.cacheWriteTokens += event.cacheWriteTokens ?? 0;
-        // Missing prices are unknown; Pi's unpriced custom-model zero is not a price quote.
-        if (
-          result.modelCalls >= budget.maxModelCalls ||
-          (result.inputTokens ?? budget.maxTokens) +
-            (result.outputTokens ?? budget.maxTokens) +
-            result.cacheReadTokens +
-            result.cacheWriteTokens >=
-            budget.maxTokens
-        )
-          exceeded();
+        result.cacheReadTokens = addUsage(result.cacheReadTokens, event.cacheReadTokens);
+        result.cacheWriteTokens = addUsage(result.cacheWriteTokens, event.cacheWriteTokens);
+        // Equality is valid for a terminal response. The transport denies the
+        // next paid attempt before dispatch, independently of usage callbacks.
+        if (measuredTokens() > budget.maxTokens) exceeded();
       },
     };
     for await (const event of options.runtime.run(request, { signal: controller.signal })) {
@@ -319,6 +351,14 @@ export async function runPilotTask(options: {
     clearTimeout(timer);
     controller.abort();
     await options.runtime.abort(runId).catch(() => undefined);
+    await transport?.close();
+    if (dispatchedCalls > observedCalls) {
+      result.inputTokens =
+        result.outputTokens =
+        result.cacheReadTokens =
+        result.cacheWriteTokens =
+          null;
+    }
     await rm(root, { recursive: true, force: true });
     result.latencyMs = Math.round(performance.now() - began);
   }
@@ -373,21 +413,7 @@ export async function runPilot(options: {
       );
   }
   if (options.pricing) {
-    for (const row of results)
-      if (
-        row.completed &&
-        !row.budgetExceeded &&
-        !row.failure &&
-        row.modelCalls > 0 &&
-        row.inputTokens !== null &&
-        row.outputTokens !== null
-      )
-        row.costUsd =
-          (row.inputTokens * options.pricing.inputPerMillion +
-            row.outputTokens * options.pricing.outputPerMillion +
-            row.cacheReadTokens * options.pricing.cacheReadPerMillion +
-            row.cacheWriteTokens * options.pricing.cacheWritePerMillion) /
-          1_000_000;
+    for (const row of results) row.costUsd = estimatePilotCost(row, options.pricing);
   }
   return {
     schemaVersion: 1,
@@ -401,8 +427,34 @@ export async function runPilot(options: {
       "Correctness is a fixture rubric, not a general quality score.",
       "No live human intervention is supplied; interventions are zero by design.",
       "Cost is an estimate using supplied prices, or unknown without pricing. Offline usage is synthetic.",
-      "Budgets stop after observed usage and can overshoot by one in-flight request.",
+      "Model-call limits are enforced before HTTP dispatch; token limits use observed usage and may overshoot by one response. Unreported cache tokens cannot be bounded.",
+      "The pilot transport verifies explicit non-thinking controls on both serialized protocols before forwarding.",
       "Only settings JSON is editable; arbitrary generated code is never executed.",
     ],
   };
+}
+
+function addUsage(total: number | null, value: number | null | undefined): number | null {
+  return total === null || value == null ? null : total + value;
+}
+
+export function estimatePilotCost(row: PilotResult, pricing: PilotPricing): number | null {
+  if (
+    !row.completed ||
+    row.budgetExceeded ||
+    row.failure ||
+    row.modelCalls === 0 ||
+    row.inputTokens === null ||
+    row.outputTokens === null ||
+    (row.cacheReadTokens === null && pricing.cacheReadPerMillion !== 0) ||
+    (row.cacheWriteTokens === null && pricing.cacheWritePerMillion !== 0)
+  )
+    return null;
+  return (
+    (row.inputTokens * pricing.inputPerMillion +
+      row.outputTokens * pricing.outputPerMillion +
+      (row.cacheReadTokens ?? 0) * pricing.cacheReadPerMillion +
+      (row.cacheWriteTokens ?? 0) * pricing.cacheWritePerMillion) /
+    1_000_000
+  );
 }

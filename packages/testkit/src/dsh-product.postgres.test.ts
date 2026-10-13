@@ -134,6 +134,7 @@ it.skipIf(!enabled)(
           signal: new AbortController().signal,
         },
       );
+      const originalRead = handles.sandbox.readFile.bind(handles.sandbox);
       const read = vi.spyOn(handles.sandbox, "readFile");
       pilotBot = bot.id;
       const send = async (text: string, expected: string) => {
@@ -179,9 +180,57 @@ it.skipIf(!enabled)(
         result: null,
         request: { name: "read_file", executionId: expect.any(String) },
       });
+      // Hold a tool in an active run, send a durable follow-up, then let both
+      // runs finish. Successful continuation finalization must consume steering.
+      const baseline = await handles.prisma.run.findMany({
+        where: { botId: bot.id },
+        select: { id: true },
+      });
+      const baselineRuns = baseline.length;
+      let releaseRead!: () => void;
+      let enteredRead!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        enteredRead = resolve;
+      });
+      const released = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      read.mockImplementationOnce(async (...args) => {
+        enteredRead();
+        await released;
+        return originalRead(...args);
+      });
+      const active = await rpc<{ runId: string }>("threads/send", {
+        botId: bot.id,
+        text: "Read README.md once more.",
+      });
+      try {
+        await entered;
+        await rpc("threads/send", { botId: bot.id, text: "Read README.md for the follow-up." });
+        expect(await handles.prisma.steeringMessage.count({ where: { runId: active.runId } })).toBe(
+          1,
+        );
+      } finally {
+        releaseRead();
+      }
+      await expect
+        .poll(
+          async () => {
+            const rows = await handles.prisma.run.findMany({
+              where: { botId: bot.id, id: { notIn: baseline.map((row) => row.id) } },
+            });
+            return rows.length === 2 && rows.every((row) => row.status === "completed");
+          },
+          { timeout: 20000, interval: 100 },
+        )
+        .toBe(true);
+      expect(await handles.prisma.steeringMessage.count({ where: { botId: bot.id } })).toBe(0);
+      expect(await handles.prisma.run.count({ where: { botId: bot.id } })).toBe(baselineRuns + 2);
+      expect(requests).toHaveLength(4);
+      expect(read).toHaveBeenCalledTimes(4);
       await rpc("bots/update", { botId: bot.id, disabledBuiltinTools: ["read_file"] });
       await send("Read README.md despite the disabled tool.", "failed");
-      expect(read).toHaveBeenCalledTimes(2);
+      expect(read).toHaveBeenCalledTimes(4);
       expect(requests.at(-1)!.tools.some((tool) => tool.name === "read_file")).toBe(false);
       // Reconstruct a process-loss boundary using synthetic rows, then disable DSH selection.
       await handles.prisma.externalEffect.update({
@@ -206,7 +255,7 @@ it.skipIf(!enabled)(
       expect(
         await handles.prisma.externalEffect.findUniqueOrThrow({ where: { id: ledger[0]!.id } }),
       ).toMatchObject({ status: "uncertain" });
-      expect(read).toHaveBeenCalledTimes(2);
+      expect(read).toHaveBeenCalledTimes(4);
     } finally {
       await stop?.();
       await server.close();
