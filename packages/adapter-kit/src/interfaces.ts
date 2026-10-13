@@ -246,6 +246,10 @@ export interface SemanticMemoryProvider {
 
 export interface AgentRuntime {
   describe(): AdapterDescriptor<AgentRuntimeCapabilities>;
+  /** A non-replayable runtime must durably claim a fresh run before execution. */
+  executionPolicy?(
+    request: Pick<AgentRunRequest, "botId">,
+  ): { id: string; replay: "never" } | undefined;
   run(
     request: AgentRunRequest,
     context?: Partial<AdapterContext>,

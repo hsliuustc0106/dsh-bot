@@ -36,6 +36,7 @@ export interface DshBridgeHooks {
   signal: AbortSignal;
   onEvent(event: DshEvent): void | Promise<void>;
   executeTool(call: Extract<DshEvent, { type: "tool" }>, signal: AbortSignal): Promise<unknown>;
+  onUncertainTool?(call: Extract<DshEvent, { type: "tool" }>): Promise<void>;
 }
 
 export class DshBridgeError extends Error {
@@ -61,6 +62,7 @@ export class DshBridge {
       cliPath: string;
       startupTimeoutMs?: number;
       shutdownGraceMs?: number;
+      toolSettlementGraceMs?: number;
     },
   ) {}
 
@@ -151,7 +153,7 @@ export class DshBridge {
     const tools = new Set(configure.tools.map((tool) => tool.name));
     const calls = new Set<string>();
     const usage = new Set<string>();
-    const pending = new Set<Promise<void>>();
+    const pending = new Map<Promise<void>, Extract<DshEvent, { type: "tool" }>>();
     const controller = new AbortController();
     const signal = AbortSignal.any([hooks.signal, controller.signal]);
     const send = (payload: Payload<Outgoing>) => {
@@ -254,7 +256,7 @@ export class DshBridge {
                   });
               }
             })();
-            pending.add(work);
+            pending.set(work, message);
             void work.finally(() => pending.delete(work));
           } else if (message.type === "done") {
             if (pending.size) throw new DshBridgeError("PROTOCOL");
@@ -277,9 +279,17 @@ export class DshBridge {
       stop();
       await closed;
       if (killTimer) clearTimeout(killTimer);
-      // Killing the model loop does not establish that an external tool stopped.
-      // The caller owns tool cancellation; always join dispatched work here.
-      await Promise.allSettled(pending);
+      // A remote tool may ignore cancellation. Bound the wait, persist uncertainty,
+      // and retain the original callbacks so a late result can still be recorded.
+      let settlementTimer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.allSettled(pending.keys()),
+        new Promise<void>((resolve) => {
+          settlementTimer = setTimeout(resolve, this.options.toolSettlementGraceMs ?? 5000);
+        }),
+      ]);
+      if (settlementTimer) clearTimeout(settlementTimer);
+      await Promise.all([...pending.values()].map((call) => hooks.onUncertainTool?.(call)));
     }
   }
 }

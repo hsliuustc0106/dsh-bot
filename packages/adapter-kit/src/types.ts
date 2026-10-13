@@ -185,6 +185,8 @@ export interface AgentToolExecutionResult {
 
 /** Hooks for a tool call that can report output before it returns. */
 export interface AgentToolExecutionObserver {
+  /** Runtime-owned cancellation, combined with the executor's lease signal. */
+  signal?: AbortSignal;
   /**
    * A shell command has already produced output and is still running.
    * Resolves with the final redacted result when the process exits.
@@ -490,6 +492,8 @@ export interface AgentRunRequest {
   ) => Promise<unknown>;
   /** Called after a tool returns; implementations must not persist raw result contents. */
   onToolCompleted?: (completion: AgentToolCompletion) => Promise<void> | void;
+  /** Await durable recording when a dispatched tool did not settle during shutdown. */
+  onToolUncertain?: (executionId: string) => Promise<void>;
   /** Atomically claim durable user steering at the runtime's next safe turn boundary. */
   claimSteering?: (seenIds: string[]) => Promise<AgentSteeringMessage[]>;
 }

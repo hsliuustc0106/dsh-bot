@@ -67,6 +67,14 @@ input.on("line", (line) => {
       return;
     }
     if (request.prompt === "wait") return;
+    if (request.prompt === "waiting") {
+      send({ type: "text", text: "Waiting" });
+      return;
+    }
+    if (request.prompt === "crash-tool") {
+      tool();
+      process.exit(9);
+    }
     if (request.prompt === "read") {
       send({ type: "tool", callId: "read-1", name: "read_file", args: { path: "README.md" } });
       return;

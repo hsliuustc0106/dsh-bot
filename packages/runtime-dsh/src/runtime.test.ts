@@ -30,6 +30,8 @@ it("uses the supplied executor and producer accounting", async () => {
     "read_file",
     { path: "README.md" },
     expect.stringMatching(/^run:dsh:/),
+    undefined,
+    expect.objectContaining({ signal: expect.any(AbortSignal) }),
   );
   expect(events.at(-1)).toMatchObject({ type: "done", text: "repository contents" });
   expect(onUsage).toHaveBeenCalledOnce();
@@ -44,10 +46,8 @@ it("keeps executor denials and raw diagnostics out of model output", async () =>
   const executeTool = vi.fn(async () => {
     throw new Error("private-detail");
   });
-  const events = await collect(request({ executeTool }));
+  await expect(collect(request({ executeTool }))).rejects.toThrow("verify its outcome");
   expect(executeTool).toHaveBeenCalledOnce();
-  expect(JSON.stringify(events)).not.toContain("private-detail");
-  expect(events.at(-1)).toMatchObject({ type: "done" });
 });
 it("filters tools by name, route and write declaration while preserving history", async () => {
   const history: AgentRunRequest["history"] = [
@@ -103,6 +103,69 @@ it.each([
   const executeTool = vi.fn();
   await expect(collect(request({ ...patch, executeTool }))).rejects.toThrow();
   expect(executeTool).not.toHaveBeenCalled();
+});
+
+it.each(["runtime", "upstream", "consumer"])(
+  "cancels a waiting generation through %s",
+  async (method) => {
+    const runtime = new DshAgentRuntime({ cliPath });
+    const controller = new AbortController();
+    const stream = runtime.run(request({ prompt: "waiting" }), { signal: controller.signal });
+    expect(await stream.next()).toMatchObject({ value: { type: "text", text: "Waiting" } });
+    const pending = stream.next();
+    if (method === "runtime") await runtime.abort("run");
+    else if (method === "upstream") controller.abort();
+    else await stream.return?.();
+    expect(await pending).toEqual({ done: true, value: undefined });
+  },
+);
+it("cancels in-flight tools and waits for their confirmed settlement", async () => {
+  const runtime = new DshAgentRuntime({ cliPath });
+  let started!: () => void;
+  const began = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const executeTool = vi.fn(async (_name, _args, _id, _route, observer) => {
+    started();
+    await new Promise<void>((resolve) =>
+      observer.signal.addEventListener("abort", () => resolve(), { once: true }),
+    );
+    return "settled after cancellation";
+  });
+  const onToolCompleted = vi.fn();
+  const work = collect(request({ executeTool, onToolCompleted }), runtime);
+  await began;
+  await runtime.abort("run");
+  const events = await work;
+  expect(onToolCompleted).toHaveBeenCalledWith(
+    expect.objectContaining({ result: "settled after cancellation" }),
+  );
+  expect(events.some((event) => event.type === "done")).toBe(false);
+  expect(executeTool).toHaveBeenCalledOnce();
+});
+it("isolates concurrent users including imported context and tool results", async () => {
+  const runtime = new DshAgentRuntime({ cliPath });
+  const inputs = ["first", "second"].map((id) =>
+    request({
+      runId: id,
+      botId: id,
+      threadId: id,
+      prompt: "inspect",
+      history: [{ role: "user", content: id }],
+    }),
+  );
+  const results = await Promise.all(inputs.map((input) => collect(input, runtime)));
+  const output = results.map((events) =>
+    JSON.parse(
+      events
+        .filter((e) => e.type === "text")
+        .map((e) => e.text)
+        .join(""),
+    ),
+  );
+  expect(output[0].history).toEqual(inputs[0]!.history);
+  expect(output[1].history).toEqual(inputs[1]!.history);
+  expect(output[0].home).not.toEqual(output[1].home);
 });
 
 it("claims continuation steering once and includes it only in the current user turn", async () => {

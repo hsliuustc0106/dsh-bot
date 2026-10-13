@@ -32,6 +32,10 @@ export class DshAgentRuntime implements AgentRuntime {
     };
   }
 
+  executionPolicy() {
+    return { id: "dsh", replay: "never" as const };
+  }
+
   async abort(runId: string): Promise<void> {
     const active = this.running.get(runId);
     active?.controller.abort();
@@ -143,6 +147,9 @@ export class DshAgentRuntime implements AgentRuntime {
               });
             }
           },
+          onUncertainTool: async (event) => {
+            await request.onToolUncertain?.(executionId(event));
+          },
           executeTool: async (event, toolSignal) => {
             toolSignal.throwIfAborted();
             if (!request.executeTool) throw new Error("Rakazo tool executor is unavailable");
@@ -157,6 +164,8 @@ export class DshAgentRuntime implements AgentRuntime {
                 event.name,
                 event.args,
                 completion.executionId,
+                undefined,
+                { signal: toolSignal },
               );
               completion.result = result;
               if (isToolPauseResult(result)) {
@@ -167,6 +176,11 @@ export class DshAgentRuntime implements AgentRuntime {
               return result;
             } catch (error) {
               completion.error = error;
+              if (!signal.aborted)
+                failure = new Error(
+                  "Tool execution failed; verify its outcome before starting another run",
+                );
+              controller.abort();
               throw error;
             } finally {
               completion.durationMs = Math.max(0, Date.now() - started);
