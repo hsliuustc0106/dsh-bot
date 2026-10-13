@@ -3,6 +3,7 @@ import type { AgentRuntime } from "@rakazo/adapter-kit";
 import { JiuwenSwarmRuntime } from "@rakazo/runtime-jiuwenswarm";
 import { PiAgentRuntime } from "./pi-runtime.js";
 import { piSessionsRoot } from "./pi-session.js";
+import { openProcessModelTransport } from "./process-model-transport.js";
 import { ScriptedAgentRuntime } from "./scripted-runtime.js";
 
 export type AgentRuntimeKind = "pi" | "scripted" | "dsh" | "jiuwenswarm";
@@ -77,10 +78,14 @@ export function createAgentRuntime(
   createJiuwen: (options: NonNullable<AgentRuntimeOptions["jiuwenswarm"]>) => AgentRuntime = (
     config,
   ) =>
-    new JiuwenSwarmRuntime({
-      ...config,
-      sessionRoot: resolve(options.dataDir ?? "./data", "jiuwenswarm"),
-    }),
+    new JiuwenSwarmRuntime(
+      {
+        ...config,
+        sessionRoot: resolve(options.dataDir ?? "./data", "jiuwenswarm"),
+      },
+      undefined,
+      openProcessModelTransport,
+    ),
 ): AgentRuntime {
   const kind = resolveAgentRuntimeKind(options.kind);
   if (kind === "scripted") return new ScriptedAgentRuntime();
