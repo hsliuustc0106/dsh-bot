@@ -4046,6 +4046,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
           return occurrence;
         };
 
+        const runToolContext = context;
         const applyTool = async (
           name: string,
           args: Record<string, unknown>,
@@ -4053,6 +4054,12 @@ export function createRunExecutor(deps: ExecutorDeps) {
           _route?: unknown,
           observer?: AgentToolExecutionObserver,
         ) => {
+          const context = observer?.signal
+            ? {
+                ...runToolContext,
+                signal: AbortSignal.any([runToolContext.signal, observer.signal]),
+              }
+            : runToolContext;
           context.signal.throwIfAborted();
           if (handedOff) {
             return {

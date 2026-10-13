@@ -86,7 +86,7 @@ describe("JiuwenSwarm real process boundary", () => {
     const work = (async () => {
       for await (const event of agent.run(request())) events.push(event);
     })();
-    await expect(work).rejects.toThrow("no successful terminal");
+    await expect(work).rejects.toThrow("JiuwenSwarm");
     expect(events.some((event) => event.type === "done")).toBe(false);
     const child = JSON.parse(readFileSync(marker, "utf8"));
     expect(existsSync(child.cwd)).toBe(false);
@@ -139,6 +139,51 @@ describe("JiuwenSwarm real process boundary", () => {
     ).rejects.toThrow("resume");
     expect(existsSync(marker)).toBe(false);
   });
+
+  it.each(["host-success", "host-duplicate", "host-pause", "host-question"])(
+    "routes %s through the SDK and cleans up",
+    async (mode) => {
+      const { runtime: agent, marker } = runtime(mode);
+      const executeTool = vi.fn(async () =>
+        mode === "host-pause"
+          ? {
+              kind: "agent_tool_result",
+              content: [],
+              details: { approval: "paused" },
+              terminate: true,
+            }
+          : { ok: true },
+      );
+      const onToolCompleted = vi.fn();
+      const name = mode === "host-question" ? "ask_user" : "read_file";
+      const events = await collect(
+        agent.run({
+          ...request(),
+          tools: [{ name, description: "test", inputSchema: { type: "object" } }],
+          executeTool,
+          onToolCompleted,
+        }),
+      );
+      expect(executeTool).toHaveBeenCalledTimes(mode === "host-question" ? 0 : 1);
+      expect(onToolCompleted).toHaveBeenCalledTimes(1);
+      expect(events.filter((event) => event.type === "tool")).toHaveLength(1);
+      expect(events.some((event) => event.type === "done")).toBe(
+        mode === "host-success" || mode === "host-duplicate",
+      );
+      if (mode === "host-question")
+        expect(events).toContainEqual(
+          expect.objectContaining({ type: "ask", text: "Which file?" }),
+        );
+      const child = JSON.parse(readFileSync(marker, "utf8"));
+      expect(child.request.agent.tools).toEqual(
+        child.request.host_tools.map((tool: { name: string }) => tool.name),
+      );
+      expect(child.request.mcp).toEqual([]);
+      expect(child.request.skills).toEqual([]);
+      expect(existsSync(child.cwd)).toBe(false);
+      expect(() => process.kill(child.pid, 0)).toThrow();
+    },
+  );
 
   it("fails startup on an unavailable installation", () => {
     expect(() =>

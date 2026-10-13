@@ -185,6 +185,8 @@ export interface AgentToolExecutionResult {
 
 /** Hooks for a tool call that can report output before it returns. */
 export interface AgentToolExecutionObserver {
+  /** Cancellation scoped to this runtime invocation, combined with the run lease signal. */
+  signal?: AbortSignal;
   /**
    * A shell command has already produced output and is still running.
    * Resolves with the final redacted result when the process exits.

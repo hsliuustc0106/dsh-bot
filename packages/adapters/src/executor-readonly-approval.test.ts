@@ -7,6 +7,7 @@ import type {
 import { MEMORY_REVISION_CONFLICT_ERROR } from "@rakazo/adapter-kit";
 import type { ActionApprovalRule } from "@rakazo/core";
 import { approvalEffectKey, toolEffectIdempotencyKey } from "@rakazo/core/node/approval-effect-key";
+import { HostTools, hostToolName } from "@rakazo/runtime-jiuwenswarm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isApprovalPausedResult } from "./approval-effect.js";
 import { MAX_SHARED_MEMORY_CHARS } from "./builtin-tools.js";
@@ -43,6 +44,7 @@ type Effect = {
 };
 
 function fixture({
+  jiuwenswarm = false,
   name = "demo_get_item",
   catalog = false,
   readOnly = true,
@@ -62,6 +64,7 @@ function fixture({
   existingSharedMemory,
   advanceRevisionAfterRead = false,
 }: {
+  jiuwenswarm?: boolean;
   builtin?: boolean;
   disabledBuiltinTools?: string[];
   existingSharedMemory?: string;
@@ -223,12 +226,38 @@ function fixture({
     { args: { id: "item-1" }, executionId: "call-1" },
   ];
   const runtimeRun = vi.fn(async function* (request: AgentRunRequest) {
+    const controller = new AbortController();
+    const host = jiuwenswarm
+      ? new HostTools(
+          request,
+          controller.signal,
+          () => {},
+          () => controller.abort(),
+          () => controller.abort(),
+        )
+      : undefined;
     for (const call of calls) {
-      const result = await request.executeTool!(
-        catalog ? "demo_execute_tool" : name,
-        catalog ? { id: `resource-1:${name}`, arguments: call.args } : call.args,
-        call.executionId,
-      );
+      const result = host
+        ? await host.call({
+            schema_version: "0.1",
+            type: "event",
+            sequence: 0,
+            request_id: request.runId,
+            session_id: "fixture-session",
+            event_type: "host_tool.requested",
+            payload: JSON.parse(
+              JSON.stringify({
+                call_id: call.executionId,
+                name: hostToolName(catalog ? "demo_execute_tool" : name),
+                arguments: catalog ? { id: `resource-1:${name}`, arguments: call.args } : call.args,
+              }),
+            ),
+          })
+        : await request.executeTool!(
+            catalog ? "demo_execute_tool" : name,
+            catalog ? { id: `resource-1:${name}`, arguments: call.args } : call.args,
+            call.executionId,
+          );
       results.push(result);
       if (isApprovalPausedResult(result)) return;
     }
@@ -693,5 +722,42 @@ describe("connector read-only metadata and approval enforcement", () => {
       expect(f.execute).not.toHaveBeenCalled();
       expect(f.pauseRunForInput).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("JiuwenSwarm host tools through the product executor", () => {
+  it("keeps a required approval in the existing UI without executing the connector", async () => {
+    const f = fixture({
+      jiuwenswarm: true,
+      rules: [{ effect: "require_approval", matchKind: "tool", matchValue: "demo_get_item" }],
+    });
+    await f.run();
+    expect(f.pauseRunForInput).toHaveBeenCalledOnce();
+    expect(f.execute).not.toHaveBeenCalled();
+    expect(isApprovalPausedResult(f.results[0])).toBe(true);
+  });
+  it("does not execute a denied action when the run resumes", async () => {
+    const f = fixture({
+      jiuwenswarm: true,
+      rules: [{ effect: "require_approval", matchKind: "tool", matchValue: "demo_get_item" }],
+    });
+    await f.run();
+    expect(f.effects).toHaveLength(1);
+    f.effects[0]!.status = "denied";
+    await f.run();
+    expect(f.execute).not.toHaveBeenCalled();
+  });
+  it("executes an allowed action once even when the SDK repeats its callback", async () => {
+    const f = fixture({
+      jiuwenswarm: true,
+      rules: [{ effect: "always_allow", matchKind: "tool", matchValue: "demo_get_item" }],
+    });
+    f.setCalls([
+      { args: { id: "item-1" }, executionId: "call" },
+      { args: { id: "item-1" }, executionId: "call" },
+    ]);
+    await f.run();
+    expect(f.execute).toHaveBeenCalledOnce();
+    expect(f.pauseRunForInput).not.toHaveBeenCalled();
   });
 });

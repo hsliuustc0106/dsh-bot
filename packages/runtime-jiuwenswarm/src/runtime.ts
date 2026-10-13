@@ -5,6 +5,7 @@ import type {
   AgentRuntimeEvent,
 } from "@rakazo/adapter-kit";
 import { mapEvent, mapUsage } from "./event-mapping.js";
+import { HostTools } from "./host-tools.js";
 import type { Installation, ProcessClient } from "./process-client.js";
 import { commandFor, JiuwenProcessClient, validateInstallation } from "./process-client.js";
 import { JIUWENSWARM_REVISION, JIUWENSWARM_SDK_VERSION } from "./version.js";
@@ -29,7 +30,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
       id: "jiuwenswarm",
       contractVersion: "1",
       adapterVersion: `${JIUWENSWARM_SDK_VERSION}+${JIUWENSWARM_REVISION}`,
-      capabilities: { streaming: true, tools: false, compaction: false, scripted: false },
+      capabilities: { streaming: true, tools: true, compaction: false, scripted: false },
     };
   }
 
@@ -75,6 +76,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
     const queue: AgentRuntimeEvent[] = [];
     let wake: (() => void) | undefined;
     let finished = false;
+    let paused = false;
     let failure: Error | undefined;
     let textBytes = 0;
     const emit = (event: AgentRuntimeEvent) => {
@@ -82,12 +84,29 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
       queue.push(event);
       wake?.();
     };
+    const host = new HostTools(
+      request,
+      signal,
+      emit,
+      () => {
+        paused = true;
+        controller.abort();
+      },
+      () => {
+        failure = new Error("JiuwenSwarm host callback failed; verify the action before retrying");
+        controller.abort();
+      },
+    );
     const work = this.client
       .run({
         request,
         signal,
+        hostTools: host.declarations,
+        onToolCall: (event) => host.call(event),
+        onInteraction: (event) => host.interaction(event),
         onEvent: (event) => {
           if (signal.aborted) return;
+          host.observe(event);
           const mapped = mapEvent(event);
           if (mapped) {
             textBytes += Buffer.byteLength(mapped.text);
@@ -121,7 +140,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
     this.running.set(request.runId, { controller, work });
     try {
       while (!finished || queue.length) {
-        if (signal.aborted) break;
+        if (signal.aborted && (!paused || context?.signal?.aborted)) break;
         const event = queue.shift();
         if (event) yield event;
         else

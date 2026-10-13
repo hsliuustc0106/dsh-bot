@@ -2,14 +2,6 @@ import type { AgentRunRequest, AgentRuntimeEvent } from "@rakazo/adapter-kit";
 import type { Event, RunResult } from "../vendor/index.js";
 
 export function mapEvent(event: Event): Extract<AgentRuntimeEvent, { type: "text" }> | undefined {
-  if (
-    event.event_type === "host_tool.requested" ||
-    event.event_type === "interaction.requested" ||
-    event.event_type.startsWith("tool.") ||
-    event.event_type === "chat.tool_call" ||
-    event.event_type === "chat.tool_result"
-  )
-    throw new Error("JiuwenSwarm attempted an unsupported tool or interaction");
   if (event.event_type !== "chat.delta") return;
   const payload = event.payload;
   if (
