@@ -9,6 +9,7 @@
     "includes": [
       "**",
       "!**/node_modules",
+      "!packages/runtime-jiuwenswarm/vendor",
       "!**/dist",
       "!**/build",
       "!**/coverage",

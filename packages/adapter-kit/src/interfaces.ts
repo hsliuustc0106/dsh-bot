@@ -245,7 +245,7 @@ export interface SemanticMemoryProvider {
 }
 
 export interface AgentRuntime {
-  describe(): AdapterDescriptor<AgentRuntimeCapabilities>;
+  describe(request?: Pick<AgentRunRequest, "botId">): AdapterDescriptor<AgentRuntimeCapabilities>;
   run(
     request: AgentRunRequest,
     context?: Partial<AdapterContext>,

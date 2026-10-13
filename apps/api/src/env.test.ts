@@ -22,6 +22,27 @@ describe("loadEnv", () => {
       agentRuntimeOptions: { kind: "dsh", dsh: { botId: "pilot", cliPath: "/opt/dsh/bin.js" } },
     });
   });
+  it("passes JiuwenSwarm selection through the shared worker configuration parser", () => {
+    expect(
+      loadEnv({
+        ...base,
+        AGENT_RUNTIME: "jiuwenswarm",
+        AGENT_RUNTIME_BOT_ID: "pilot",
+        JIUWENSWARM_PYTHON_PATH: "/opt/jiuwen/python",
+        JIUWENSWARM_SOURCE_DIR: "/opt/jiuwen/source",
+      }),
+    ).toMatchObject({
+      agentRuntime: "jiuwenswarm",
+      agentRuntimeOptions: {
+        kind: "jiuwenswarm",
+        jiuwenswarm: {
+          botId: "pilot",
+          pythonPath: "/opt/jiuwen/python",
+          sourceDir: "/opt/jiuwen/source",
+        },
+      },
+    });
+  });
   it("keeps the ticket board off unless explicitly enabled", () => {
     expect(loadEnv(base).ticketBoardEnabled).toBe(false);
     for (const value of ["false", "1", ""])
