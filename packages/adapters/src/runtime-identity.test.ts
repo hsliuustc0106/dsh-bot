@@ -22,3 +22,39 @@ it.each([1, 0])(
     });
   },
 );
+
+it("claims the invocation before returning a protected runtime identity", async () => {
+  const create = vi.fn(async () => ({}));
+  const tx = {
+    $queryRaw: vi.fn(async () => []),
+    run: { findFirst: vi.fn(async () => ({ spaceId: "space", runtimeInputGeneration: 2 })) },
+    externalEffect: { findUnique: vi.fn(async () => null), create },
+  };
+  const prisma = {
+    run: { updateMany: vi.fn(async () => ({ count: 1 })) },
+    $transaction: async (callback: (client: typeof tx) => unknown) => callback(tx),
+  } as unknown as PrismaClient;
+  const runtime = {
+    describe: () => ({
+      id: "test",
+      adapterVersion: "1",
+      capabilities: { requiresInvocationClaim: true },
+    }),
+  } as unknown as AgentRuntime;
+  await recordRuntimeIdentity(prisma, runtime, {
+    runId: "run",
+    botId: "bot",
+    workerId: "worker",
+    fence: 3,
+  });
+  expect(create).toHaveBeenCalledExactlyOnceWith({
+    data: {
+      runId: "run",
+      spaceId: "space",
+      kind: "runtime_invocation",
+      idempotencyKey: "runtime-invocation:run:2",
+      status: "claimed",
+      request: { generation: 2, fence: 3 },
+    },
+  });
+});

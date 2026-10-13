@@ -36,6 +36,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
         compaction: false,
         scripted: false,
         durableToolTracking: true,
+        requiresInvocationClaim: true,
       },
     };
   }

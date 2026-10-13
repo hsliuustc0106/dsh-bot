@@ -578,6 +578,8 @@ export type AgentRuntimeEvent =
 export interface AgentRuntimeCapabilities {
   /** Host calls can outlive the runtime process and require durable outcome tracking. */
   durableToolTracking?: boolean;
+  /** A worker restart must not replay a model invocation without fresh user input. */
+  requiresInvocationClaim?: boolean;
   streaming: boolean;
   compaction: boolean;
   tools: boolean;

@@ -90,9 +90,15 @@ identity; it never stores arguments or outputs. Cancellation or process completi
 marks outstanding calls uncertain without waiting for the remote action. A known
 late result can settle that record. Repeated call identities cannot dispatch again,
 and unresolved calls block subsequent dispatch in the run. The job reconciler marks
-abandoned intent records uncertain after terminal state or lease expiry. Full
-invocation replay protection and durable session recovery remain required before
-the live pilot.
+abandoned intent records uncertain after terminal state or lease expiry. Durable
+session recovery remains required before the live pilot.
+
+Before model startup, a separate durable invocation claim prevents retries from
+starting the same model invocation again, even when a new worker would generate
+new callback IDs. Only a validated answer to a pending question or approval
+increments the run’s input generation and permits another invocation. Lease
+renewal or worker replacement does not reset this protection. An interrupted
+invocation requires checking unfinished actions before starting a new run.
 
 ## Verification and remaining gates
 
