@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { AgentRunRequest } from "@rakazo/adapter-kit";
 import type { Event, RunInput, RunResult } from "../vendor/index.js";
-import { Client } from "../vendor/index.js";
+import { Client, Records } from "../vendor/index.js";
 import { JIUWENSWARM_REVISION } from "./version.js";
 
 export interface Installation {
@@ -77,16 +77,18 @@ export function validateInstallation(config: Installation): void {
       })}\n`,
     });
     if (probe.error || probe.status !== 0) throw new Error("probe");
-    const result = JSON.parse(probe.stdout.trim());
+    const records = new Records("rakazo-probe", "protocol.capabilities");
+    records.accept(Buffer.from(probe.stdout));
+    const result = records.finish(probe.status);
+    const features = result.type === "query_result" ? result.data?.features : null;
     if (
       result.type !== "query_result" ||
-      result.status !== "completed" ||
-      result.exit_code !== 0 ||
-      result.schema_version !== "0.1" ||
-      result.request_id !== "rakazo-probe" ||
       result.data?.protocol_revision !== 1 ||
-      result.data.features?.empty_tools !== true ||
-      result.data.features?.stable_event_fields !== true
+      !features ||
+      typeof features !== "object" ||
+      Array.isArray(features) ||
+      features.empty_tools !== true ||
+      features.stable_event_fields !== true
     )
       throw new Error("capabilities");
   } catch {

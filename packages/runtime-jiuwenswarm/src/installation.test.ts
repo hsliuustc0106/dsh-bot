@@ -14,14 +14,18 @@ function prepare() {
   calls.execFileSync.mockReturnValueOnce(JIUWENSWARM_REVISION).mockReturnValueOnce("");
   calls.spawnSync.mockReturnValue({
     status: 0,
-    stdout: JSON.stringify({
+    stdout: `${JSON.stringify({
       type: "query_result",
+      sequence: 0,
+      session_id: null,
+      operation: "protocol.capabilities",
+      error: null,
       status: "completed",
       exit_code: 0,
       schema_version: "0.1",
       request_id: "rakazo-probe",
       data: { protocol_revision: 1, features: { empty_tools: true, stable_event_fields: true } },
-    }),
+    })}\n`,
   });
 }
 it("probes the pinned clean installation without inheriting environment or cwd", () => {
@@ -54,5 +58,16 @@ it.each(["wrong-revision", "dirty", "unsupported", "malformed", "crash"])(
     expect(() => validateInstallation(installation)).toThrow(JIUWENSWARM_REVISION);
     if (mode === "wrong-revision" || mode === "dirty")
       expect(calls.spawnSync).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["error", "sequence", "session_id", "operation", "request_id"])(
+  "rejects a mismatched probe %s",
+  (field) => {
+    prepare();
+    const reply = JSON.parse(calls.spawnSync.getMockImplementation()!().stdout);
+    reply[field] = field === "sequence" ? 1 : "unexpected";
+    calls.spawnSync.mockReturnValue({ status: 0, stdout: `${JSON.stringify(reply)}\n` });
+    expect(() => validateInstallation(installation)).toThrow(JIUWENSWARM_REVISION);
   },
 );
