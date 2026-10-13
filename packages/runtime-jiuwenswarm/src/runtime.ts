@@ -8,7 +8,8 @@ import type {
 import { RuntimeSessionBusyError } from "@rakazo/adapter-kit";
 import { mapEvent, mapUsage } from "./event-mapping.js";
 import { HostTools } from "./host-tools.js";
-import type { Installation, ProcessClient } from "./process-client.js";
+import { processReasoningEffort } from "./model-settings.js";
+import type { Installation, ModelTransportFactory, ProcessClient } from "./process-client.js";
 import { commandFor, JiuwenProcessClient, validateInstallation } from "./process-client.js";
 import { JIUWENSWARM_REVISION, JIUWENSWARM_SDK_VERSION } from "./version.js";
 
@@ -20,7 +21,11 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
   private readonly client: ProcessClient;
   private readonly persistentSessions: boolean;
 
-  constructor(installation: Installation, client?: ProcessClient) {
+  constructor(
+    installation: Installation,
+    client?: ProcessClient,
+    private readonly modelTransport?: ModelTransportFactory,
+  ) {
     this.persistentSessions = Boolean(installation.sessionRoot);
     if (client) this.client = client;
     else {
@@ -30,6 +35,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
         undefined,
         undefined,
         installation.sessionRoot,
+        modelTransport,
       );
     }
   }
@@ -89,7 +95,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
       ? AbortSignal.any([context.signal, controller.signal])
       : controller.signal;
     if (signal.aborted) return;
-    validateRequest(request);
+    validateRequest(request, Boolean(this.modelTransport));
     const usageCallId = `${request.runId}:jiuwenswarm:${randomUUID()}`;
     const queue: AgentRuntimeEvent[] = [];
     let wake: (() => void) | undefined;
@@ -179,7 +185,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
   }
 }
 
-function validateRequest(request: AgentRunRequest) {
+function validateRequest(request: AgentRunRequest, hostTransport: boolean) {
   for (const value of [request.model.maxTokens, request.model.contextWindow]) {
     if (value != null && (!Number.isSafeInteger(value) || value < 1))
       throw new Error("JiuwenSwarm token limits must be positive safe integers");
@@ -190,17 +196,20 @@ function validateRequest(request: AgentRunRequest) {
     request.model.maxTokens > request.model.contextWindow
   )
     throw new Error("JiuwenSwarm output limit exceeds the configured context window");
+  if (request.model.oauth || !["openai", "openai-compatible"].includes(request.model.provider))
+    throw new Error("JiuwenSwarm requires an OpenAI-compatible API connection");
   if (
-    request.model.provider !== "openai" ||
-    !request.model.apiKey ||
-    request.model.oauth ||
-    (request.model.baseUrl && request.model.baseUrl !== "https://api.openai.com/v1")
+    !hostTransport &&
+    (request.model.provider !== "openai" ||
+      !request.model.apiKey ||
+      (request.model.baseUrl && request.model.baseUrl !== "https://api.openai.com/v1"))
   )
     throw new Error(
       "This JiuwenSwarm stage requires an OpenAI API-key connection at its standard endpoint",
     );
-  if (request.model.thinkingLevel != null)
-    throw new Error("JiuwenSwarm reasoning settings are not yet verified");
+  if (hostTransport && request.model.provider === "openai" && !request.model.apiKey)
+    throw new Error("The selected model connection requires an API key");
+  processReasoningEffort(request.model);
   if (request.resumeFromCheckpoint || request.fallbackModels?.length)
     throw new Error("JiuwenSwarm resume and fallback are unavailable");
   if (request.currentTurnImages?.length || request.history.some((entry) => entry.images?.length))

@@ -169,11 +169,14 @@ describe("JiuwenSwarm real process boundary", () => {
     const runtimeSession: RuntimeSessionCoordinator = {
       acquire: async () => ({ storageKey, checkpoint, finish }),
     };
-    const history: AgentRunRequest["history"] = [{ id: "old", role: "user", content: "Earlier" }];
-    await collect(agent.run({ ...request(), history, runtimeSession }));
+    const history: AgentRunRequest["history"] = [
+      { id: "old", role: "user", content: "hello" },
+      { id: "current", role: "user", content: "hello" },
+    ];
+    await collect(agent.run({ ...request(), sourceMessageId: "current", history, runtimeSession }));
     const first = JSON.parse(readFileSync(marker, "utf8"));
     expect(first.request.session_id).toBeUndefined();
-    expect(JSON.parse(first.request.input).history).toEqual(history);
+    expect(JSON.parse(first.request.input)).toEqual({ history: [history[0]], message: "hello" });
     expect(existsSync(first.request.workspace.cwd)).toBe(true);
     expect(existsSync(first.cwd)).toBe(false);
     const added = { id: "new", role: "user" as const, content: "New context" };

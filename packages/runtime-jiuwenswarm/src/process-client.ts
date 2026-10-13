@@ -3,12 +3,23 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import type { AgentRunRequest } from "@rakazo/adapter-kit";
+import type { AgentRunModel, AgentRunRequest } from "@rakazo/adapter-kit";
 import { withoutSteeringMessages } from "@rakazo/adapter-kit";
 import type { Event, HostTool, JsonObject, RunInput, RunResult } from "../vendor/index.js";
 import { Client, Records } from "../vendor/index.js";
+import { processReasoningEffort } from "./model-settings.js";
 import { historyKey, readSessionCheckpoint } from "./session-checkpoint.js";
 import { JIUWENSWARM_REVISION } from "./version.js";
+
+export type ModelTransportFactory = (
+  model: AgentRunModel,
+  signal: AbortSignal,
+  maxCalls: number,
+) => Promise<{
+  baseUrl: string;
+  apiKey: string;
+  close(): Promise<void>;
+}>;
 
 export interface Installation {
   pythonPath: string;
@@ -125,6 +136,7 @@ export class JiuwenProcessClient implements ProcessClient {
     private readonly deadlineMs = 120000,
     private readonly shutdownGraceMs = 2000,
     private readonly sessionRoot?: string,
+    private readonly modelTransport?: ModelTransportFactory,
   ) {}
 
   async run({
@@ -148,6 +160,9 @@ export class JiuwenProcessClient implements ProcessClient {
           hostTools,
           request.model.provider,
           request.model.id,
+          request.model.baseUrl,
+          request.model.thinkingLevel,
+          request.model.reasoning,
           request.model.maxTokens,
           request.model.contextWindow,
         ]),
@@ -159,6 +174,7 @@ export class JiuwenProcessClient implements ProcessClient {
     let root: string | undefined;
     let checkpoint: string | undefined;
     let completed = false;
+    let transport: Awaited<ReturnType<ModelTransportFactory>> | undefined;
     try {
       signal.throwIfAborted();
       root = mkdtempSync(join(tmpdir(), "rakazo-jiuwen-"));
@@ -177,7 +193,13 @@ export class JiuwenProcessClient implements ProcessClient {
       const previous = readSessionCheckpoint(session?.checkpoint);
       const seen = new Set(previous?.historyKeys ?? []);
       const history = withoutSteeringMessages(request.history, steering).filter(
-        (message) => !seen.has(historyKey(message)),
+        (message) =>
+          !seen.has(historyKey(message)) &&
+          !(
+            message.role === "user" &&
+            request.sourceMessageId &&
+            message.id === request.sourceMessageId
+          ),
       );
       const historyKeys = [
         ...new Set([
@@ -188,6 +210,7 @@ export class JiuwenProcessClient implements ProcessClient {
       ];
       mkdirSync(join(root, "config"), { mode: 0o700 });
       const model = request.model;
+      transport = await this.modelTransport?.(model, signal, hostTools.length ? 32 : 1);
       // JSON is valid YAML. Credentials are invocation-local, never in argv or logs.
       writeFileSync(
         join(root, "config/config.yaml"),
@@ -198,7 +221,8 @@ export class JiuwenProcessClient implements ProcessClient {
                 model_id: "rakazo",
                 is_default: true,
                 model_client_config: {
-                  api_base: "https://api.openai.com/v1",
+                  // biome-ignore lint/suspicious/noTemplateCurlyInString: Upstream expands the invocation-local endpoint.
+                  api_base: "${RAKAZO_MODEL_BASE_URL}",
                   // biome-ignore lint/suspicious/noTemplateCurlyInString: Upstream config expands this environment reference.
                   api_key: "${RAKAZO_MODEL_KEY}",
                   // biome-ignore lint/suspicious/noTemplateCurlyInString: Upstream config expands this environment reference.
@@ -207,12 +231,14 @@ export class JiuwenProcessClient implements ProcessClient {
                   endpoint_profile: "openai",
                 },
                 model_config_obj: {
+                  reasoning_effort: processReasoningEffort(model),
                   ...(model.maxTokens == null ? {} : { max_tokens: model.maxTokens }),
                   ...(model.contextWindow == null ? {} : { context_window: model.contextWindow }),
                 },
               },
             ],
           },
+          react: { enable_read_image_multimodal: false },
           memory: { engine: "none" },
           auto_memory_enabled: false,
           auto_recap: { enabled: false },
@@ -256,7 +282,8 @@ export class JiuwenProcessClient implements ProcessClient {
         env: scrubSdkEnvironment({
           ...isolatedEnvironment(root),
           JIUWENSWARM_DATA_DIR: dataRoot,
-          RAKAZO_MODEL_KEY: model.apiKey,
+          RAKAZO_MODEL_KEY: transport?.apiKey ?? model.apiKey,
+          RAKAZO_MODEL_BASE_URL: transport?.baseUrl ?? "https://api.openai.com/v1",
           RAKAZO_MODEL_ID: model.id,
         }),
         shutdownGraceMs: this.shutdownGraceMs,
@@ -282,6 +309,7 @@ export class JiuwenProcessClient implements ProcessClient {
       return result;
     } finally {
       if (root) rmSync(root, { recursive: true, force: true });
+      await transport?.close();
       await session?.finish(
         completed && checkpoint ? "completed" : wasPaused?.() ? "paused" : "interrupted",
         checkpoint,

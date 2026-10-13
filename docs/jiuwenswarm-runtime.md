@@ -32,10 +32,12 @@ configuration and credentials. Keep this application data private.
 
 Replace the example bot ID with one existing disposable test bot. These settings
 select an adapter installation, not model credentials. The model and credential
-come from Rakazo's existing connection settings. This initial stage accepts an
-OpenAI API-key connection at the standard endpoint only. It rejects OAuth,
-custom endpoints, explicit reasoning settings, images, checkpoint resumes and
-fallback models until their translation and security behavior are verified.
+come from Rakazo's existing connection settings. The shared factory accepts
+OpenAI API-key connections and compatible connections through the existing URL,
+DNS, redirect and credential security policy. Compatible connections that declare
+reasoning support use standard `reasoning_effort`: the default is `medium` and
+`off` becomes `none`. Other explicit reasoning requests fail closed. OAuth,
+images, checkpoint resumes and fallback models remain unavailable.
 It never silently switches the selected bot to another runtime.
 
 Startup checks absolute paths, exact source revision, a clean checkout and the
@@ -55,6 +57,13 @@ inherited variable before adding the small process environment. It does not
 mutate the API/worker environment. Temporary data is removed after child cleanup.
 This is application-level tool restriction, not an operating-system sandbox.
 Only a trusted pinned installation should be used.
+
+The shared factory routes model calls through a private loopback relay. The child
+receives a random invocation token; the real connection credential stays in the
+host. The relay fixes the endpoint, model and output limit, verifies reasoning
+settings, counts forwarded calls including failed responses, and aborts outstanding
+requests on cancellation. Automatic image-capability probing is disabled for this
+text-only adapter so it cannot consume a hidden model call before the task.
 
 The backend maps each bot/thread/runtime to a durable session. It serializes
 acquisition with the invocation claim under the thread lock. Busy sessions wait
@@ -132,6 +141,14 @@ startup failure and keeping other bots on Pi. PostgreSQL tests exercise duplicat
 worker claims, validated answer generations, session serialization, stale cleanup,
 lease loss, uncertain actions, late results and history isolation. Budget tests
 cover invalid token limits, turn/cost terminal failures and unknown measurements.
+
+An opt-in real-Python protocol test runs both adapters against a local streaming
+model emulator (`VERIFY_JIUWENSWARM=1`, with the installation paths above). It
+asserts the model, actual output limit, actual reasoning effort and forwarded call
+count. The generic Pi connection clamps `xhigh` and `max` to `high`; JiuwenSwarm
+preserves them. Those requested labels are therefore not equivalent pilot settings.
+Pi can also reduce the output limit to fit context capacity. Use matching observed
+wire settings for comparisons; a matching request object is insufficient.
 
 A live model run is not part of these tests. Before a pilot, verify
 permissions and question routing with the live installation; verify
