@@ -1,4 +1,4 @@
-# JiuwenSwarm runtime: initial process integration
+# JiuwenSwarm runtime: process integration and recovery
 
 This implements the runtime-selection, Process SDK and host-tool foundation. It
 does not complete the single-agent safety pilot or team milestones. Pi remains
@@ -91,7 +91,10 @@ with a two-minute host deadline and bounded process shutdown grace. Host callbac
 metadata and results are bounded (128 unique calls, 8 MiB cumulative arguments,
 512 KiB per result and 8 MiB cumulative results). This is not a strict monetary spending limit. Unknown cost and
 usage stay null; ambiguous upstream cache counts are not fabricated into token
-buckets. There are no automatic process retries.
+buckets. Token limits must be positive integers and output limits cannot exceed
+the configured context window. Terminal limit failures are accounted without a
+successful completion. Each invocation has a distinct usage ID, including answers
+that continue the same run. There are no automatic process retries.
 
 The SDK validates JSONL framing, identities, sequence, terminal status and the
 matching process exit. `chat.final` and EOF cannot finish a run successfully.
@@ -125,7 +128,10 @@ unknown usage, malformed and oversized output, foreign identity, crash, final
 text without a terminal, mismatched exit, failure status, host/native tool
 attempts, timeout, slow consumers, duplicate run IDs, abort, disconnect, scrubbed
 environment and temporary-directory cleanup. Shared-factory tests cover selection,
-startup failure and keeping other bots on Pi.
+startup failure and keeping other bots on Pi. PostgreSQL tests exercise duplicate
+worker claims, validated answer generations, session serialization, stale cleanup,
+lease loss, uncertain actions, late results and history isolation. Budget tests
+cover invalid token limits, turn/cost terminal failures and unknown measurements.
 
 A live model run is not part of these tests. Before a pilot, verify
 permissions and question routing with the live installation; verify

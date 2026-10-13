@@ -4,7 +4,7 @@ import type {
   ConnectorCall,
   ConnectorTool,
 } from "@rakazo/adapter-kit";
-import { MEMORY_REVISION_CONFLICT_ERROR } from "@rakazo/adapter-kit";
+import { MEMORY_REVISION_CONFLICT_ERROR, RuntimeSessionBusyError } from "@rakazo/adapter-kit";
 import type { ActionApprovalRule } from "@rakazo/core";
 import { approvalEffectKey, toolEffectIdempotencyKey } from "@rakazo/core/node/approval-effect-key";
 import { HostTools, hostToolName } from "@rakazo/runtime-jiuwenswarm";
@@ -46,6 +46,7 @@ type Effect = {
 function fixture({
   jiuwenswarm = false,
   durableToolTracking = false,
+  runtimeBusy = false,
   name = "demo_get_item",
   catalog = false,
   readOnly = true,
@@ -67,6 +68,7 @@ function fixture({
 }: {
   jiuwenswarm?: boolean;
   durableToolTracking?: boolean;
+  runtimeBusy?: boolean;
   builtin?: boolean;
   disabledBuiltinTools?: string[];
   existingSharedMemory?: string;
@@ -254,6 +256,7 @@ function fixture({
     { args: { id: "item-1" }, executionId: "call-1" },
   ];
   const runtimeRun = vi.fn(async function* (request: AgentRunRequest) {
+    if (runtimeBusy) throw new RuntimeSessionBusyError();
     const controller = new AbortController();
     const host = jiuwenswarm
       ? new HostTools(
@@ -291,6 +294,7 @@ function fixture({
     }
     yield { type: "done" as const, text: "Done" };
   });
+  const enqueue = vi.fn(async () => undefined);
   const executor = createRunExecutor({
     prisma,
     runtime: {
@@ -342,12 +346,15 @@ function fixture({
     },
     memoryProviders: { resolve: async () => null },
     events: { append: vi.fn(async () => undefined), pauseRunForInput, finalizeRun },
-    jobs: { enqueue: vi.fn(async () => undefined) },
+    jobs: { enqueue },
     secrets,
     autoReview: autoReviewProvider,
     shutdownSignal,
   } as unknown as Parameters<typeof createRunExecutor>[0]);
   return {
+    enqueue,
+    finalizeRun,
+    runState: run,
     effects,
     results,
     execute,
@@ -361,7 +368,7 @@ function fixture({
       run.status = "queued";
       await executor.continueRun(run.id, "worker-1");
       expect(runtimeRun).toHaveBeenCalled();
-      expect(prisma.attempt.update).not.toHaveBeenCalled();
+      if (!runtimeBusy) expect(prisma.attempt.update).not.toHaveBeenCalled();
       expect(finalizeRun).not.toHaveBeenCalledWith(expect.objectContaining({ outcome: "failed" }));
     },
   };
@@ -757,6 +764,21 @@ describe("connector read-only metadata and approval enforcement", () => {
 });
 
 describe("JiuwenSwarm host tools through the product executor", () => {
+  it("requeues a busy session without tools, completion, or a failure message", async () => {
+    const f = fixture({ runtimeBusy: true, durableToolTracking: true });
+    await f.run();
+    expect(f.runState.status).toBe("queued");
+    expect(f.effects).toEqual([]);
+    expect(f.execute).not.toHaveBeenCalled();
+    expect(f.finalizeRun).not.toHaveBeenCalled();
+    expect(f.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "run.continue",
+        payload: { runId: "run-1" },
+        availableAt: expect.any(Date),
+      }),
+    );
+  });
   it("keeps a required approval in the existing UI without executing the connector", async () => {
     const f = fixture({
       jiuwenswarm: true,

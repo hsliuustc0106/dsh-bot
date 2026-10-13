@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const mode = process.argv[2];
@@ -18,15 +18,18 @@ const emit = (value) =>
     })}\n`,
   );
 const event = (event_type, payload) => emit({ type: "event", event_type, payload });
+const errors = { "session-busy": "SESSION_BUSY", "session-missing": "SESSION_NOT_FOUND", "turn-limit": "TURN_LIMIT_EXCEEDED", "cost-limit": "BUDGET_EXCEEDED" };
 const finish = (code = 0) => {
   emit({
     type: "result",
     status: code ? "failed" : "completed",
     exit_code: code,
-    error: code ? { code: mode === "session-busy" ? "SESSION_BUSY" : "FAILED", message: "fixture failure" } : null,
+    error: code ? { code: errors[mode] ?? "FAILED", message: "fixture failure" } : null,
     output: "hello",
     output_json: null,
-    usage: {},
+    usage: mode === "turn-limit" || mode === "cost-limit"
+      ? { input_tokens: 10, output_tokens: 2, cache_tokens: 0, total_tokens: 12, total_cost: 0.02 }
+      : {},
   });
   lines.close();
   process.exit(code);
@@ -51,7 +54,7 @@ lines.on("line", (line) => {
   if (marker)
     writeFileSync(
       marker,
-      JSON.stringify({ pid: process.pid, cwd: process.cwd(), env: process.env, request }),
+      JSON.stringify({ pid: process.pid, cwd: process.cwd(), env: process.env, request, config: JSON.parse(readFileSync(`${process.env.JIUWENSWARM_CONFIG_DIR}/config.yaml`, "utf8")) }),
     );
   if (mode.startsWith("host-")) {
     event("host_tool.requested", {
@@ -104,5 +107,5 @@ lines.on("line", (line) => {
     });
     process.exit(1);
   }
-  finish(mode === "failed" || mode === "session-busy" ? 1 : 0);
+  finish(mode === "failed" || errors[mode] ? 1 : 0);
 });

@@ -263,6 +263,69 @@ describe("JiuwenSwarm real process boundary", () => {
     },
   );
 
+  it.each([0, -1, 1.5, Number.NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid token limits (%s) before model startup",
+    async (maxTokens) => {
+      const { runtime: agent, marker } = runtime();
+      await expect(
+        collect(agent.run({ ...request(), model: { ...request().model, maxTokens } })),
+      ).rejects.toThrow("token limits");
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
+
+  it("honors the token boundary and bounded turn counts without claiming a dollar ceiling", async () => {
+    const { runtime: agent, marker } = runtime();
+    await collect(
+      agent.run({ ...request(), model: { ...request().model, maxTokens: 1, contextWindow: 1 } }),
+    );
+    const child = JSON.parse(readFileSync(marker, "utf8"));
+    expect(child.config.models.defaults[0].model_config_obj).toEqual({
+      max_tokens: 1,
+      context_window: 1,
+    });
+    expect(child.request.max_turns).toBe(1);
+    expect(child.request.max_budget_usd).toBeUndefined();
+    await expect(
+      collect(
+        agent.run({ ...request(), model: { ...request().model, maxTokens: 2, contextWindow: 1 } }),
+      ),
+    ).rejects.toThrow("context window");
+  });
+
+  it.each(["turn-limit", "cost-limit"])(
+    "accounts a terminal %s failure without success or retry",
+    async (mode) => {
+      const { runtime: agent } = runtime(mode);
+      const onUsage = vi.fn();
+      const events: AgentRuntimeEvent[] = [];
+      await expect(
+        (async () => {
+          for await (const event of agent.run({ ...request(), onUsage })) events.push(event);
+        })(),
+      ).rejects.toThrow("no successful terminal");
+      expect(events.some((event) => event.type === "done")).toBe(false);
+      expect(onUsage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          inputTokens: 10,
+          outputTokens: 2,
+          totalTokens: 12,
+          costUsd: 0.02,
+        }),
+      );
+    },
+  );
+
+  it("keeps usage records distinct for successive invocations of an answered run", async () => {
+    const { runtime: agent } = runtime();
+    const onUsage = vi.fn();
+    await collect(agent.run({ ...request(), onUsage }));
+    await collect(agent.run({ ...request(), onUsage }));
+    expect(onUsage).toHaveBeenCalledTimes(2);
+    expect(onUsage.mock.calls[0]![0].callId).not.toBe(onUsage.mock.calls[1]![0].callId);
+    expect(onUsage.mock.calls[0]![0].costUsd).toBeNull();
+  });
+
   it.each([
     "malformed",
     "crash",
@@ -271,6 +334,7 @@ describe("JiuwenSwarm real process boundary", () => {
     "eof",
     "wrong-exit",
     "failed",
+    "session-missing",
     "tool",
     "native-tool",
   ])("fails closed and cleans up after %s", async (mode) => {
@@ -371,6 +435,8 @@ describe("JiuwenSwarm real process boundary", () => {
       expect(child.request.agent.tools).toEqual(
         child.request.host_tools.map((tool: { name: string }) => tool.name),
       );
+      expect(child.request.max_turns).toBe(32);
+      expect(child.request.agent.max_iterations).toBe(32);
       expect(child.request.mcp).toEqual([]);
       expect(child.request.skills).toEqual([]);
       expect(existsSync(child.cwd)).toBe(false);

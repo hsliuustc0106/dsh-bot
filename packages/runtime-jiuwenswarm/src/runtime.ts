@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   AdapterContext,
   AgentRunRequest,
@@ -89,6 +90,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
       : controller.signal;
     if (signal.aborted) return;
     validateRequest(request);
+    const usageCallId = `${request.runId}:jiuwenswarm:${randomUUID()}`;
     const queue: AgentRuntimeEvent[] = [];
     let wake: (() => void) | undefined;
     let finished = false;
@@ -134,7 +136,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
       })
       .then(async (result) => {
         // Account a terminal usage record even if cancellation won the race.
-        const usage = mapUsage(result, request);
+        const usage = mapUsage(result, request, usageCallId);
         await request.onUsage?.(usage);
         if (signal.aborted) return;
         if (result.status !== "completed" || result.exit_code !== 0 || result.error !== null)
@@ -178,6 +180,16 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
 }
 
 function validateRequest(request: AgentRunRequest) {
+  for (const value of [request.model.maxTokens, request.model.contextWindow]) {
+    if (value != null && (!Number.isSafeInteger(value) || value < 1))
+      throw new Error("JiuwenSwarm token limits must be positive safe integers");
+  }
+  if (
+    request.model.maxTokens != null &&
+    request.model.contextWindow != null &&
+    request.model.maxTokens > request.model.contextWindow
+  )
+    throw new Error("JiuwenSwarm output limit exceeds the configured context window");
   if (
     request.model.provider !== "openai" ||
     !request.model.apiKey ||
