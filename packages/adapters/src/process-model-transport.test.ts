@@ -153,3 +153,29 @@ it("streams model output and aborts the outstanding request on cancellation", as
   await expect(reader.read()).rejects.toThrow();
   await expect(call(transport)).rejects.toThrow();
 });
+
+it("lets the pilot reject changed wire budgets before normalization or forwarding", async () => {
+  const forwarded = vi.fn((_req: IncomingMessage, res: ServerResponse) => res.end());
+  const baseUrl = await endpoint(forwarded);
+  const inspect = vi.fn((settings: { maxOutputTokens: number | null }) => {
+    if (settings.maxOutputTokens !== 8) throw new Error("Mismatched output budget");
+  });
+  const transport = await openProcessModelTransport(
+    model(baseUrl),
+    new AbortController().signal,
+    1,
+    inspect,
+  );
+  cleanup.push(transport.close);
+  expect((await call(transport, { max_tokens: 1 })).status).toBe(502);
+  expect(forwarded).not.toHaveBeenCalled();
+  expect(inspect).toHaveBeenLastCalledWith({
+    model: "test-model",
+    reasoningEffort: undefined,
+    maxOutputTokens: 1,
+  });
+  expect((await call(transport, { max_tokens: 8 })).status).toBe(200);
+  expect((await call(transport, { max_tokens: 8 })).status).toBe(429);
+  expect(inspect).toHaveBeenCalledTimes(2);
+  expect(forwarded).toHaveBeenCalledOnce();
+});

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { ModelTransportFactory } from "@rakazo/runtime-jiuwenswarm";
+import type { AgentRunModel } from "@rakazo/adapter-kit";
 import { processReasoningEffort } from "@rakazo/runtime-jiuwenswarm";
 import {
   assertAllowedOpenAiCompatibleUrl,
@@ -11,7 +11,16 @@ import {
 import { createOpenAiCompatibleFetch } from "./pi-openai-compatible-provider.js";
 
 /** Bind a process to one approved model endpoint; it never receives the real credential. */
-export const openProcessModelTransport: ModelTransportFactory = async (model, signal, maxCalls) => {
+export const openProcessModelTransport = async (
+  model: AgentRunModel,
+  signal: AbortSignal,
+  maxCalls: number,
+  inspect?: (settings: {
+    model: string;
+    reasoningEffort?: string;
+    maxOutputTokens: number | null;
+  }) => void,
+) => {
   signal.throwIfAborted();
   const reasoningEffort = processReasoningEffort(model);
   const official =
@@ -73,6 +82,11 @@ export const openProcessModelTransport: ModelTransportFactory = async (model, si
       }
       // Do not refund failed calls: a lost response does not prove zero model usage.
       requestSignal.throwIfAborted();
+      inspect?.({
+        model: body.model,
+        reasoningEffort: body.reasoning_effort,
+        maxOutputTokens: body.max_completion_tokens ?? body.max_tokens ?? null,
+      });
       calls++;
       if (model.maxTokens != null) {
         if ("max_completion_tokens" in body) body.max_completion_tokens = model.maxTokens;
