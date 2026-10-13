@@ -24,7 +24,10 @@ function prepare() {
       exit_code: 0,
       schema_version: "0.1",
       request_id: "rakazo-probe",
-      data: { protocol_revision: 1, features: { empty_tools: true, stable_event_fields: true } },
+      data: {
+        protocol_revision: 1,
+        features: { empty_tools: true, stable_event_fields: true, host_tools: true },
+      },
     })}\n`,
   });
 }

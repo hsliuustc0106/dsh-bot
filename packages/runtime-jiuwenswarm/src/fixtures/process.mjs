@@ -6,6 +6,7 @@ const marker = process.argv[3];
 const lines = createInterface({ input: process.stdin });
 let request;
 let sequence = 0;
+let callbacks = 0;
 const emit = (value) =>
   process.stdout.write(
     `${JSON.stringify({
@@ -32,6 +33,17 @@ const finish = (code = 0) => {
 };
 lines.on("line", (line) => {
   if (request) {
+    const response = JSON.parse(line);
+    if (response.type === "cancel") process.exit(130);
+    if (mode.startsWith("host-") && response.type === "tool_result") {
+      if (mode === "host-duplicate" && callbacks++ === 0) {
+        event("host_tool.requested", {
+          call_id: "call",
+          name: request.host_tools[0].name,
+          arguments: { path: "example.txt" },
+        });
+      } else finish();
+    }
     if (mode === "cancel" || mode === "pending") process.exit(130);
     return;
   }
@@ -41,6 +53,17 @@ lines.on("line", (line) => {
       marker,
       JSON.stringify({ pid: process.pid, cwd: process.cwd(), env: process.env, request }),
     );
+  if (mode.startsWith("host-")) {
+    event("host_tool.requested", {
+      call_id: "call",
+      name: request.host_tools[0].name,
+      arguments:
+        mode === "host-question"
+          ? { question: "Which file?", options: ["A", "B"] }
+          : { path: "example.txt" },
+    });
+    return;
+  }
   if (mode === "hang" || mode === "pending") {
     setInterval(() => {}, 1000);
     return;

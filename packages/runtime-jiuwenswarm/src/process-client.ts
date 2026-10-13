@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { AgentRunRequest } from "@rakazo/adapter-kit";
-import type { Event, RunInput, RunResult } from "../vendor/index.js";
+import type { Event, HostTool, JsonObject, RunInput, RunResult } from "../vendor/index.js";
 import { Client, Records } from "../vendor/index.js";
 import { JIUWENSWARM_REVISION } from "./version.js";
 
@@ -88,7 +88,8 @@ export function validateInstallation(config: Installation): void {
       typeof features !== "object" ||
       Array.isArray(features) ||
       features.empty_tools !== true ||
-      features.stable_event_fields !== true
+      features.stable_event_fields !== true ||
+      features.host_tools !== true
     )
       throw new Error("capabilities");
   } catch {
@@ -104,12 +105,15 @@ export interface ProcessRun {
   request: AgentRunRequest;
   signal: AbortSignal;
   onEvent: (event: Event) => void;
+  hostTools: HostTool[];
+  onToolCall: (event: Event) => Promise<unknown>;
+  onInteraction: (event: Event) => JsonObject[];
 }
 export interface ProcessClient {
   run(input: ProcessRun): Promise<RunResult>;
 }
 
-/** First stage intentionally exposes no native or host tools, skills or MCP. */
+/** Exposes only invocation-scoped host tools; native tools, skills and MCP stay disabled. */
 export class JiuwenProcessClient implements ProcessClient {
   constructor(
     private readonly command: readonly string[],
@@ -117,7 +121,14 @@ export class JiuwenProcessClient implements ProcessClient {
     private readonly shutdownGraceMs = 2000,
   ) {}
 
-  async run({ request, signal, onEvent }: ProcessRun): Promise<RunResult> {
+  async run({
+    request,
+    signal,
+    onEvent,
+    hostTools,
+    onToolCall,
+    onInteraction,
+  }: ProcessRun): Promise<RunResult> {
     signal.throwIfAborted();
     const root = mkdtempSync(join(tmpdir(), "rakazo-jiuwen-"));
     try {
@@ -165,14 +176,18 @@ export class JiuwenProcessClient implements ProcessClient {
         agent: {
           name: "rakazo",
           instructions: request.instructions,
-          tools: [],
+          tools: hostTools.map((tool) => tool.name),
           skills: [],
-          max_iterations: 1,
+          max_iterations: hostTools.length ? 32 : 1,
         },
         skills: [],
         mcp: [],
-        host_tools: [],
-        max_turns: 1,
+        host_tools: hostTools,
+        // Upstream approval only gates these host callbacks; Rakazo remains the authority.
+        permissions: {
+          tools: Object.fromEntries(hostTools.map((tool) => [tool.name, "allow" as const])),
+        },
+        max_turns: hostTools.length ? 32 : 1,
         workspace: { cwd: root, project_dir: root, trusted_dirs: [] },
         timeout_seconds: Math.max(1, Math.floor(this.deadlineMs / 1000)),
       };
@@ -191,12 +206,8 @@ export class JiuwenProcessClient implements ProcessClient {
         signal,
         deadlineMs: this.deadlineMs,
         onEvent,
-        onInteraction: () => {
-          throw new Error("JiuwenSwarm interactions are disabled in this stage");
-        },
-        onToolCall: () => {
-          throw new Error("JiuwenSwarm tools are disabled in this stage");
-        },
+        onInteraction,
+        onToolCall,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

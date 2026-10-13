@@ -1,9 +1,10 @@
 # JiuwenSwarm runtime: initial process integration
 
-This implements the runtime-selection and Process SDK foundation. It does not
-complete the single-agent safety pilot or team milestones. Pi remains the default.
-The selected bot can produce text only; tools, MCP, skills, approvals, persistent
-sessions and team delegation are unavailable. Other bots continue using Pi.
+This implements the runtime-selection, Process SDK and host-tool foundation. It
+does not complete the single-agent safety pilot or team milestones. Pi remains
+the default. The selected bot accepts text and exposes tools only through
+Rakazo’s scoped executor. Native tools, MCP, skills, persistent sessions and team
+delegation remain unavailable. Other bots continue using Pi.
 Web, Electron and mobile all reach the same backend selection through the API and
 worker; there is no platform-specific runtime switch or new UI.
 
@@ -36,7 +37,7 @@ It never silently switches the selected bot to another runtime.
 
 Startup checks absolute paths, exact source revision, a clean checkout and the
 configuration-independent Process CLI capability query (schema 0.1, revision 1,
-empty tool allowlists and stable event fields). Python uses isolated import mode.
+empty tool allowlists, host callbacks and stable event fields). Python uses isolated import mode.
 The executor records the selected adapter ID and version in `runtimeId` and
 `runtimeVersion` under the active run lease before execution. For JiuwenSwarm the
 version includes the SDK version and exact source revision.
@@ -52,10 +53,24 @@ This is application-level tool restriction, not an operating-system sandbox.
 Only a trusted pinned installation should be used.
 
 Every run starts a new session with the supplied conversation history once. No
-upstream session is reused. `agent.tools`, skills, MCP and host tools are all
-explicitly empty. Unexpected tool or interaction events fail the run. Each
-invocation permits one model call, has a two-minute host deadline and a bounded
-shutdown grace. This is not a strict monetary spending limit. Unknown cost and
+upstream session is reused. `agent.tools` contains only namespaced host tools. Skills and MCP remain empty;
+native tool observations and native permission requests fail closed. Tool callbacks
+preserve the original route and pass through `executeTool`, so Rakazo owns user/run
+identity, validation, permission checks and audit. Matching repeated call IDs share
+one promise and one audit; reusing an ID with changed arguments fails the run.
+Callbacks from another run/session or after cancellation cannot dispatch.
+
+Host approval and protected-input pauses stop the child. `ask_user` and supported
+single-question SDK interactions map to the existing ask UI; its existing
+run/space/message/action checks govern replies. No answer or native permission is
+fabricated for the cancelled process. A later turn gets the user’s answer through
+Rakazo history; durable session continuation is a separate milestone. Subagent and
+native takeover tools remain unavailable in this single-agent adapter.
+
+Invocations permit one model call without tools or at most 32 with host tools,
+with a two-minute host deadline and bounded process shutdown grace. Host callback
+metadata and results are bounded (128 unique calls, 8 MiB cumulative arguments,
+512 KiB per result and 8 MiB cumulative results). This is not a strict monetary spending limit. Unknown cost and
 usage stay null; ambiguous upstream cache counts are not fabricated into token
 buckets. There are no automatic process retries.
 
@@ -63,7 +78,9 @@ The SDK validates JSONL framing, identities, sequence, terminal status and the
 matching process exit. `chat.final` and EOF cannot finish a run successfully.
 The adapter bounds pending events and response bytes. Iterator return/throw,
 request cancellation and explicit abort terminate the owned process and await
-cleanup. The parent process never dispatches host tools in this stage.
+cleanup. Runtime cancellation is forwarded into the executor’s existing run signal.
+Stopping the child does not establish that a remote host action stopped; durable
+uncertain-outcome reconciliation is still required before the live pilot.
 
 ## Verification and remaining gates
 
@@ -74,8 +91,9 @@ attempts, timeout, slow consumers, duplicate run IDs, abort, disconnect, scrubbe
 environment and temporary-directory cleanup. Shared-factory tests cover selection,
 startup failure and keeping other bots on Pi.
 
-A live model run is not part of these tests. Before a pilot, implement and verify
-host permissions, audit and question routing; session serialization and recovery;
+A live model run is not part of these tests. Before a pilot, verify
+permissions and question routing with the live installation; implement session
+serialization and recovery;
 steering delivery; connection/reasoning conformance; and budgets. Do not reuse the
 DSH pilot implementation as JiuwenSwarm evidence. Gateway/team mode remains disabled
 until member permissions, cancellation, usage and terminal outcomes are proved.

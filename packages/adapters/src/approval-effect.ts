@@ -1,6 +1,8 @@
-import type { AgentToolExecutionResult } from "@rakazo/adapter-kit";
+import type { ApprovalPausedToolResult } from "@rakazo/adapter-kit";
+import { isToolPauseResult } from "@rakazo/adapter-kit";
 
-export type ApprovalPausedToolResult = AgentToolExecutionResult & { terminate: true };
+export type { ApprovalPausedToolResult } from "@rakazo/adapter-kit";
+export { isToolPauseResult } from "@rakazo/adapter-kit";
 
 export interface ApprovedEffectReplay {
   kind: string;
@@ -320,16 +322,6 @@ export function approvalPausedToolResult(): ApprovalPausedToolResult {
     details: { approval: "paused" },
     terminate: true,
   };
-}
-
-export function isToolPauseResult(result: unknown): result is ApprovalPausedToolResult {
-  if (!result || typeof result !== "object") return false;
-  const record = result as ApprovalPausedToolResult;
-  if (record.kind !== "agent_tool_result") return false;
-  const details = record.details;
-  if (!details || typeof details !== "object") return false;
-  const pause = details as { approval?: unknown; secret?: unknown };
-  return pause.approval === "paused" || pause.secret === "paused";
 }
 
 export function isApprovalPausedResult(result: unknown): result is ApprovalPausedToolResult {
