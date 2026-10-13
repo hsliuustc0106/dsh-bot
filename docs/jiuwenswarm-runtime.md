@@ -53,7 +53,11 @@ This is application-level tool restriction, not an operating-system sandbox.
 Only a trusted pinned installation should be used.
 
 Every run starts a new session with the supplied conversation history once. No
-upstream session is reused. `agent.tools` contains only namespaced host tools. Skills and MCP remain empty;
+upstream session is reused. At process startup, the adapter atomically claims queued
+follow-ups through the existing lease-scoped callback and includes them once,
+removing their copies from conversation history. Messages arriving after that
+boundary wait for a continuation run. Failed claims and image follow-ups cannot
+launch a model process or produce a successful completion. `agent.tools` contains only namespaced host tools. Skills and MCP remain empty;
 native tool observations and native permission requests fail closed. Tool callbacks
 preserve the original route and pass through `executeTool`, so Rakazo owns user/run
 identity, validation, permission checks and audit. Matching repeated call IDs share
@@ -94,6 +98,6 @@ startup failure and keeping other bots on Pi.
 A live model run is not part of these tests. Before a pilot, verify
 permissions and question routing with the live installation; implement session
 serialization and recovery;
-steering delivery; connection/reasoning conformance; and budgets. Do not reuse the
+connection/reasoning conformance; and budgets. Do not reuse the
 DSH pilot implementation as JiuwenSwarm evidence. Gateway/team mode remains disabled
 until member permissions, cancellation, usage and terminal outcomes are proved.

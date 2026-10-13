@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { AgentRunRequest } from "@rakazo/adapter-kit";
+import { withoutSteeringMessages } from "@rakazo/adapter-kit";
 import type { Event, HostTool, JsonObject, RunInput, RunResult } from "../vendor/index.js";
 import { Client, Records } from "../vendor/index.js";
 import { JIUWENSWARM_REVISION } from "./version.js";
@@ -132,6 +133,13 @@ export class JiuwenProcessClient implements ProcessClient {
     signal.throwIfAborted();
     const root = mkdtempSync(join(tmpdir(), "rakazo-jiuwen-"));
     try {
+      // The Process SDK has no verified live steering channel. Claim once at
+      // startup; later arrivals stay queued for the next invocation boundary.
+      const steering = (await request.claimSteering?.([])) ?? [];
+      signal.throwIfAborted();
+      if (steering.some((message) => message.images?.length))
+        throw new Error("JiuwenSwarm accepts text-only follow-ups in this stage");
+      const history = withoutSteeringMessages(request.history, steering);
       mkdirSync(join(root, "config"), { mode: 0o700 });
       const model = request.model;
       // JSON is valid YAML. Credentials are invocation-local, never in argv or logs.
@@ -170,7 +178,11 @@ export class JiuwenProcessClient implements ProcessClient {
       );
       const input: RunInput = {
         request_id: request.runId,
-        input: JSON.stringify({ history: request.history, message: request.prompt }),
+        input: JSON.stringify({
+          history,
+          message: request.prompt,
+          ...(steering.length ? { followUps: steering.map((message) => message.text) } : {}),
+        }),
         model: `${model.id}#0`,
         mode: "agent.work.normal",
         agent: {

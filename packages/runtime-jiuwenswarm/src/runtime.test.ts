@@ -70,6 +70,84 @@ describe("JiuwenSwarm real process boundary", () => {
     expect(agent.describe().adapterVersion).toContain(JIUWENSWARM_REVISION);
   });
 
+  it("claims queued follow-ups once and sends each without its history copy", async () => {
+    const { runtime: agent, marker } = runtime();
+    const claimSteering = vi.fn(async () => [
+      { id: "steering-1", messageId: "message-1", text: "Review first" },
+      { id: "steering-2", messageId: "message-2", text: "Then summarize" },
+    ]);
+    await collect(
+      agent.run({
+        ...request(),
+        history: [
+          { id: "older", role: "user", content: "Review first" },
+          { id: "message-1", role: "user", content: "Review first" },
+          { id: "message-2", role: "user", content: "Then summarize" },
+        ],
+        claimSteering,
+      }),
+    );
+    expect(claimSteering).toHaveBeenCalledExactlyOnceWith([]);
+    const child = JSON.parse(readFileSync(marker, "utf8"));
+    expect(JSON.parse(child.request.input)).toEqual({
+      history: [{ id: "older", role: "user", content: "Review first" }],
+      message: "hello",
+      followUps: ["Review first", "Then summarize"],
+    });
+  });
+
+  it("does not launch after cancellation during a follow-up claim", async () => {
+    const { runtime: agent, marker } = runtime();
+    const controller = new AbortController();
+    const claimSteering = vi.fn(async () => {
+      controller.abort();
+      return [];
+    });
+    expect(
+      await collect(
+        agent.run(
+          { ...request(), claimSteering },
+          {
+            signal: controller.signal,
+          },
+        ),
+      ),
+    ).toEqual([]);
+    expect(claimSteering).toHaveBeenCalledTimes(1);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("does not report success or launch when a follow-up claim fails", async () => {
+    const { runtime: agent, marker } = runtime();
+    const claimSteering = vi.fn(async () => {
+      throw new Error("lease lost");
+    });
+    await expect(collect(agent.run({ ...request(), claimSteering }))).rejects.toThrow(
+      "no successful terminal",
+    );
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("rejects follow-up images instead of silently discarding them", async () => {
+    const { runtime: agent, marker } = runtime();
+    await expect(
+      collect(
+        agent.run({
+          ...request(),
+          claimSteering: async () => [
+            {
+              id: "steering",
+              messageId: "message",
+              text: "Describe this",
+              images: [{ name: "example.png", mimeType: "image/png", data: new Uint8Array() }],
+            },
+          ],
+        }),
+      ),
+    ).rejects.toThrow("no successful terminal");
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it.each([
     "malformed",
     "crash",
