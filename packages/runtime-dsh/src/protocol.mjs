@@ -24,6 +24,9 @@ export const hostMessage = z.discriminatedUnion("type", [
     type: z.literal("configure"),
     prompt: z.string(),
     instructions: z.string(),
+    history: z
+      .array(z.strictObject({ role: z.enum(["user", "assistant", "system"]), content: z.string() }))
+      .max(512),
     tools: z.array(toolSchema).max(128),
     model: modelSchema,
   }),

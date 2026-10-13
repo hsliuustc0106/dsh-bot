@@ -8,11 +8,11 @@ import type { z } from "zod";
 import { frames } from "./frames.mjs";
 import type { DshConnection } from "./profile.js";
 import { dshProfile, validateDshInstallation } from "./profile.js";
+import type { modelSchema } from "./protocol.mjs";
 import {
   childMessage,
   hostMessage,
   MAX_FRAME_BYTES,
-  type modelSchema,
   PROTOCOL_VERSION,
   toolSchema,
 } from "./protocol.mjs";
@@ -26,6 +26,7 @@ type Payload<T> = T extends unknown ? Omit<T, "v" | "sessionId" | "seq"> : never
 export interface DshTask {
   prompt: string;
   instructions: string;
+  history?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   tools: DshTool[];
   model: z.infer<typeof modelSchema>;
   connection: DshConnection;
@@ -78,6 +79,7 @@ export class DshBridge {
       type: "configure",
       prompt: task.prompt,
       instructions: task.instructions,
+      history: task.history ?? [],
       tools,
       model: task.model,
     });

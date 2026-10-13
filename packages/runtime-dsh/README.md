@@ -38,8 +38,12 @@ DSH_TEST_CLI_PATH=/tmp/rakazo-dsh/node_modules/@deepseek-ai/dsh/lib/bin.js \
 The installation is explicit; tests do not download software or call a hosted
 model. Without `DSH_TEST_CLI_PATH`, only the actual-DSH cases are skipped.
 
-This package is the bridge gate in the five-PR rollout. Role-preserving Rakazo
-history mapping and `AgentRuntime` integration follow in PR 3. Durable uncertain
+This package implements the bridge and `AgentRuntime` integration. History is
+imported as closed, role-preserving text events; only new tool requests reach
+Rakazo’s executor. The initial runtime exposes `read_file` and `list_files` only.
+Regenerate the JavaScript boundary declarations with `pnpm --filter @rakazo/runtime-dsh generate:types` after changing their source, then format with Biome.
+
+Durable uncertain
 outcome handling and the controlled pilot follow in PRs 4 and 5. The bridge joins
 dispatched callbacks during shutdown; killing DSH is not proof that an external
 tool stopped. No conversation migration, resume, native subagents, shared daemon,

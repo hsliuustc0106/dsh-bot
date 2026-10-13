@@ -598,6 +598,9 @@ importers:
       '@rakazo/logging':
         specifier: workspace:*
         version: link:../logging
+      '@rakazo/runtime-dsh':
+        specifier: workspace:*
+        version: link:../runtime-dsh
       chat:
         specifier: 4.40.0
         version: 4.40.0(zod@4.6.2)
@@ -870,6 +873,9 @@ importers:
 
   packages/runtime-dsh:
     dependencies:
+      '@rakazo/adapter-kit':
+        specifier: workspace:*
+        version: link:../adapter-kit
       zod:
         specifier: 4.6.2
         version: 4.6.2
