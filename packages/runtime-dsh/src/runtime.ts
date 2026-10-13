@@ -5,7 +5,7 @@ import type {
   AgentRuntimeEvent,
   AgentToolCompletion,
 } from "@rakazo/adapter-kit";
-import { isToolPauseResult } from "@rakazo/adapter-kit";
+import { isToolPauseResult, withoutSteeringMessages } from "@rakazo/adapter-kit";
 import type { DshEvent } from "./bridge.js";
 import { DshBridge } from "./bridge.js";
 import { validateDshInstallation } from "./profile.js";
@@ -87,12 +87,21 @@ export class DshAgentRuntime implements AgentRuntime {
     };
     const executionId = (event: Extract<DshEvent, { type: "tool" | "usage" }>) =>
       `${request.runId}:dsh:${event.sessionId}:${event.callId}`;
-    const work = this.bridge
-      .run(
+    const work = (async () => {
+      // DSH consumes steering at fresh-session startup. Mid-run arrivals remain
+      // durable for the next continuation, whose successful completion consumes them.
+      const steering = (await request.claimSteering?.([])) ?? [];
+      signal.throwIfAborted();
+      return this.bridge.run(
         {
-          prompt: request.prompt,
+          prompt: steering.length
+            ? `${request.prompt}\n\nAdditional user context:\n${steering.map((item) => item.text).join("\n")}`
+            : request.prompt,
           instructions: request.instructions,
-          history: request.history.map(({ role, content }) => ({ role, content })),
+          history: withoutSteeringMessages(request.history, steering).map(({ role, content }) => ({
+            role,
+            content,
+          })),
           model: {
             id: request.model.id,
             maxTokens: request.model.maxTokens,
@@ -183,7 +192,8 @@ export class DshAgentRuntime implements AgentRuntime {
             }
           },
         },
-      )
+      );
+    })()
       .then((outcome) => {
         if (paused) emit({ type: "done" });
         else if (outcome === "completed" && !signal.aborted) {
