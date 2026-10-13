@@ -45,6 +45,7 @@ type Effect = {
 
 function fixture({
   jiuwenswarm = false,
+  durableToolTracking = false,
   name = "demo_get_item",
   catalog = false,
   readOnly = true,
@@ -65,6 +66,7 @@ function fixture({
   advanceRevisionAfterRead = false,
 }: {
   jiuwenswarm?: boolean;
+  durableToolTracking?: boolean;
   builtin?: boolean;
   disabledBuiltinTools?: string[];
   existingSharedMemory?: string;
@@ -128,6 +130,7 @@ function fixture({
     leaseFence: 0,
   };
   const externalEffect = {
+    findFirst: vi.fn(async () => null),
     findMany: vi.fn(
       async ({
         where,
@@ -149,6 +152,8 @@ function fixture({
         ) ?? null,
     ),
     create: vi.fn(async ({ data }: { data: Omit<Effect, "id"> }) => {
+      if (effects.some((effect) => effect.idempotencyKey === data.idempotencyKey))
+        throw new Error("Duplicate effect");
       const effect = { ...data, id: `effect-${effects.length + 1}` };
       effects.push(effect);
       return { ...effect };
@@ -157,9 +162,28 @@ function fixture({
       Object.assign(effects.find((effect) => effect.id === where.id)!, data);
     }),
     updateMany: vi.fn(
-      async ({ where, data }: { where: { id: string; status: string }; data: Partial<Effect> }) => {
+      async ({
+        where,
+        data,
+      }: {
+        where: {
+          id?: string;
+          idempotencyKey?: string;
+          runId?: string;
+          kind?: string;
+          status: string | { in: string[] };
+        };
+        data: Partial<Effect>;
+      }) => {
         const effect = effects.find(
-          (effect) => effect.id === where.id && effect.status === where.status,
+          (effect) =>
+            (!where.id || effect.id === where.id) &&
+            (!where.idempotencyKey || effect.idempotencyKey === where.idempotencyKey) &&
+            (!where.runId || effect.runId === where.runId) &&
+            (!where.kind || effect.kind === where.kind) &&
+            (typeof where.status === "string"
+              ? effect.status === where.status
+              : where.status.in.includes(effect.status)),
         );
         if (!effect) return { count: 0 };
         Object.assign(effect, data);
@@ -168,7 +192,11 @@ function fixture({
     ),
   };
   const prisma = {
+    $queryRaw: vi.fn(async () => []),
+    $transaction: async (callback: (tx: unknown) => Promise<unknown>): Promise<unknown> =>
+      callback(prisma),
     run: {
+      findFirst: vi.fn(async () => run),
       findUnique: vi.fn(async () => run),
       findUniqueOrThrow: vi.fn(async () => run),
       updateMany: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
@@ -265,7 +293,10 @@ function fixture({
   });
   const executor = createRunExecutor({
     prisma,
-    runtime: { describe: () => ({ capabilities: { scripted: false } }), run: runtimeRun },
+    runtime: {
+      describe: () => ({ capabilities: { scripted: false, durableToolTracking } }),
+      run: runtimeRun,
+    },
     connector: {
       discoverTools: async () =>
         builtin
@@ -750,6 +781,7 @@ describe("JiuwenSwarm host tools through the product executor", () => {
   it("executes an allowed action once even when the SDK repeats its callback", async () => {
     const f = fixture({
       jiuwenswarm: true,
+      durableToolTracking: true,
       rules: [{ effect: "always_allow", matchKind: "tool", matchValue: "demo_get_item" }],
     });
     f.setCalls([
@@ -759,5 +791,11 @@ describe("JiuwenSwarm host tools through the product executor", () => {
     await f.run();
     expect(f.execute).toHaveBeenCalledOnce();
     expect(f.pauseRunForInput).not.toHaveBeenCalled();
+    expect(f.effects.filter((effect) => effect.kind === "runtime_host_tool")).toEqual([
+      expect.objectContaining({
+        status: "completed",
+        request: { name: "demo_get_item", fence: expect.any(Number) },
+      }),
+    ]);
   });
 });

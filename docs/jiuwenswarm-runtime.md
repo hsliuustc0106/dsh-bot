@@ -83,8 +83,16 @@ matching process exit. `chat.final` and EOF cannot finish a run successfully.
 The adapter bounds pending events and response bytes. Iterator return/throw,
 request cancellation and explicit abort terminate the owned process and await
 cleanup. Runtime cancellation is forwarded into the executor’s existing run signal.
-Stopping the child does not establish that a remote host action stopped; durable
-uncertain-outcome reconciliation is still required before the live pilot.
+Stopping the child does not establish that a remote host action stopped. Before
+host dispatch, the executor records intent under the current worker lease in a
+durable ledger. The ledger stores tool name and lease fence, with a hashed call
+identity; it never stores arguments or outputs. Cancellation or process completion
+marks outstanding calls uncertain without waiting for the remote action. A known
+late result can settle that record. Repeated call identities cannot dispatch again,
+and unresolved calls block subsequent dispatch in the run. The job reconciler marks
+abandoned intent records uncertain after terminal state or lease expiry. Full
+invocation replay protection and durable session recovery remain required before
+the live pilot.
 
 ## Verification and remaining gates
 

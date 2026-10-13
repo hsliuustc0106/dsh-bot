@@ -576,6 +576,8 @@ export type AgentRuntimeEvent =
   | { type: "done"; text?: string };
 
 export interface AgentRuntimeCapabilities {
+  /** Host calls can outlive the runtime process and require durable outcome tracking. */
+  durableToolTracking?: boolean;
   streaming: boolean;
   compaction: boolean;
   tools: boolean;

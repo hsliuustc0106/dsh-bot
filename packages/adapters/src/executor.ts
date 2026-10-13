@@ -317,6 +317,7 @@ import {
 } from "./run-secret.js";
 import { recordRuntimeIdentity } from "./runtime-identity.js";
 import { withRuntimeCleanup } from "./runtime-stream.js";
+import { createRuntimeToolLedger } from "./runtime-tool-ledger.js";
 import {
   cancelScheduleFromTool,
   compactScheduleInput,
@@ -6494,6 +6495,14 @@ export function createRunExecutor(deps: ExecutorDeps) {
             .map((candidate) => JSON.stringify([candidate.provider, candidate.modelId])),
         );
 
+        const toolLedger = deps.runtime.describe({ botId: bot.id }).capabilities.durableToolTracking
+          ? createRuntimeToolLedger(
+              deps.prisma,
+              { runId, spaceId: run.spaceId, workerId, fence },
+              applyTool,
+              context.signal,
+            )
+          : undefined;
         try {
           await recordRuntimeIdentity(deps.prisma, deps.runtime, {
             runId,
@@ -6612,7 +6621,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               script,
               allowSilentEmpty: allowSilentEmptyRun,
               emptyResponseText,
-              executeTool: scripted ? undefined : applyTool,
+              executeTool: scripted ? undefined : (toolLedger?.executeTool ?? applyTool),
               resolveModel: scripted
                 ? undefined
                 : (provider, modelId) =>
@@ -7244,6 +7253,12 @@ export function createRunExecutor(deps: ExecutorDeps) {
               threadId: thread.id,
             });
           }
+        } finally {
+          await toolLedger?.close().catch(() => {
+            // Durable executing records remain for reconciliation. A ledger write
+            // failure after dispatch must never enter the setup retry path.
+            getLogger().error("Runtime tool outcome reconciliation is pending");
+          });
         }
       } catch (setupError) {
         const computerBusy = setupError instanceof ComputerBusyError;

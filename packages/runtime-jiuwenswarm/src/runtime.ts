@@ -30,7 +30,13 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
       id: "jiuwenswarm",
       contractVersion: "1",
       adapterVersion: `${JIUWENSWARM_SDK_VERSION}+${JIUWENSWARM_REVISION}`,
-      capabilities: { streaming: true, tools: true, compaction: false, scripted: false },
+      capabilities: {
+        streaming: true,
+        tools: true,
+        compaction: false,
+        scripted: false,
+        durableToolTracking: true,
+      },
     };
   }
 
