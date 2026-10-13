@@ -1002,7 +1002,7 @@ describe("answerRunInput", () => {
     expect(tx.run.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ status: "waiting_input" }),
-        data: { status: "queued", checkpoint: null },
+        data: { status: "queued", checkpoint: null, runtimeInputGeneration: { increment: 1 } },
       }),
     );
     expect(tx.message.update).toHaveBeenCalledWith({
@@ -1212,7 +1212,7 @@ describe("answerRunInput", () => {
       });
       expect(tx.run.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { status: "queued", checkpoint: null },
+          data: { status: "queued", checkpoint: null, runtimeInputGeneration: { increment: 1 } },
         }),
       );
     },
@@ -1279,7 +1279,7 @@ describe("answerRunInput", () => {
 
     expect(tx.run.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: { status: "queued", checkpoint: null },
+        data: { status: "queued", checkpoint: null, runtimeInputGeneration: { increment: 1 } },
       }),
     );
     expect(tx.task.updateMany).toHaveBeenCalledWith({
@@ -1435,7 +1435,7 @@ describe("answerWaitingRunWithTextInTransaction", () => {
     });
     expect(tx.run.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: { status: "queued" },
+        data: { status: "queued", runtimeInputGeneration: { increment: 1 } },
       }),
     );
   });

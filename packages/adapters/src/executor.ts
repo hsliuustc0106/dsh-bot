@@ -31,6 +31,7 @@ import {
   DEFAULT_CONTEXT_STRATEGY,
   historyCompactJob,
   MEMORY_REVISION_CONFLICT_ERROR,
+  RuntimeSessionBusyError,
   routineJobKey,
   routineWakeupJob,
   runContinueJob,
@@ -316,7 +317,9 @@ import {
   tryCompleteConnectionWithCode,
 } from "./run-secret.js";
 import { recordRuntimeIdentity } from "./runtime-identity.js";
+import { createRuntimeSessionCoordinator } from "./runtime-session.js";
 import { withRuntimeCleanup } from "./runtime-stream.js";
+import { createRuntimeToolLedger } from "./runtime-tool-ledger.js";
 import {
   cancelScheduleFromTool,
   compactScheduleInput,
@@ -6494,6 +6497,14 @@ export function createRunExecutor(deps: ExecutorDeps) {
             .map((candidate) => JSON.stringify([candidate.provider, candidate.modelId])),
         );
 
+        const toolLedger = deps.runtime.describe({ botId: bot.id }).capabilities.durableToolTracking
+          ? createRuntimeToolLedger(
+              deps.prisma,
+              { runId, spaceId: run.spaceId, workerId, fence },
+              applyTool,
+              context.signal,
+            )
+          : undefined;
         try {
           await recordRuntimeIdentity(deps.prisma, deps.runtime, {
             runId,
@@ -6507,6 +6518,18 @@ export function createRunExecutor(deps: ExecutorDeps) {
               threadId: thread.id,
               runId,
               sourceMessageId: run.sourceMessageId,
+              runtimeSession: deps.runtime.describe({ botId: bot.id }).capabilities
+                .persistentSessions
+                ? createRuntimeSessionCoordinator(deps.prisma, {
+                    runId,
+                    botId: bot.id,
+                    threadId: thread.id,
+                    spaceId: run.spaceId,
+                    workerId,
+                    fence,
+                    runtimeId: deps.runtime.describe({ botId: bot.id }).id,
+                  })
+                : undefined,
               onUsage: async (event) => {
                 await recordUsage(deps.prisma, event, {
                   spaceId: run.spaceId,
@@ -6612,7 +6635,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
               script,
               allowSilentEmpty: allowSilentEmptyRun,
               emptyResponseText,
-              executeTool: scripted ? undefined : applyTool,
+              executeTool: scripted ? undefined : (toolLedger?.executeTool ?? applyTool),
               resolveModel: scripted
                 ? undefined
                 : (provider, modelId) =>
@@ -7200,6 +7223,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             getLogger().error("history.compact enqueue failed", error);
           }
         } catch (error) {
+          if (error instanceof RuntimeSessionBusyError) throw error;
           if (!terminalCheckpointComplete) {
             await workspaceCheckpoint.flush().catch(() => undefined);
           }
@@ -7244,9 +7268,16 @@ export function createRunExecutor(deps: ExecutorDeps) {
               threadId: thread.id,
             });
           }
+        } finally {
+          await toolLedger?.close().catch(() => {
+            // Durable executing records remain for reconciliation. A ledger write
+            // failure after dispatch must never enter the setup retry path.
+            getLogger().error("Runtime tool outcome reconciliation is pending");
+          });
         }
       } catch (setupError) {
-        const computerBusy = setupError instanceof ComputerBusyError;
+        const computerBusy =
+          setupError instanceof ComputerBusyError || setupError instanceof RuntimeSessionBusyError;
         const retryForever = computerBusy || isTooManyDatabaseConnections(setupError);
         if (!computerBusy) {
           // undici collapses every network failure to "fetch failed"; the cause names the

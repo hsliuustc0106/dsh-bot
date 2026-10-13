@@ -1,0 +1,1 @@
+ALTER TABLE "runs" ADD COLUMN "runtimeInputGeneration" INTEGER NOT NULL DEFAULT 0;

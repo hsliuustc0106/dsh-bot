@@ -675,6 +675,7 @@ async function commitAnswerRunInput(
     },
     data: {
       status: "queued",
+      runtimeInputGeneration: { increment: 1 },
       ...(choiceAsk ? { checkpoint: null } : {}),
     },
   });

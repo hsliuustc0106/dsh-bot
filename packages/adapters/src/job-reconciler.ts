@@ -7,6 +7,7 @@ import { getLogger } from "@rakazo/logging";
 import type { PoolClient } from "pg";
 import { returnBotMessageOutcome } from "./bot-messages.js";
 import { scheduleComputerControlExpiry } from "./computer-control.js";
+import { reconcileRuntimeToolLedger } from "./runtime-tool-ledger.js";
 import { reconcileStuckWork } from "./stuck-work.js";
 import { isLoopGuardStopText } from "./tool-loop.js";
 import { isUserProgressClientNonce } from "./user-progress.js";
@@ -125,9 +126,11 @@ export function createJobReconciler(
       if (deps.leadership && !(await deps.leadership.tryAcquire())) return;
 
       const auxiliary = await Promise.allSettled(
-        [deps.reconcileCloudAgents, deps.reconcileComputerUpdates].map(async (reconcile) =>
-          reconcile?.(),
-        ),
+        [
+          () => reconcileRuntimeToolLedger(deps.prisma),
+          deps.reconcileCloudAgents,
+          deps.reconcileComputerUpdates,
+        ].map(async (reconcile) => reconcile?.()),
       );
       for (const result of auxiliary) {
         if (result.status === "rejected")

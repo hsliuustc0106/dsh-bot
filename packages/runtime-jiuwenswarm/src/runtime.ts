@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type {
   AdapterContext,
   AgentRunRequest,
   AgentRuntime,
   AgentRuntimeEvent,
 } from "@rakazo/adapter-kit";
+import { RuntimeSessionBusyError } from "@rakazo/adapter-kit";
 import { mapEvent, mapUsage } from "./event-mapping.js";
 import { HostTools } from "./host-tools.js";
 import type { Installation, ProcessClient } from "./process-client.js";
@@ -16,12 +18,19 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
     { controller: AbortController; work: Promise<void> }
   >();
   private readonly client: ProcessClient;
+  private readonly persistentSessions: boolean;
 
   constructor(installation: Installation, client?: ProcessClient) {
+    this.persistentSessions = Boolean(installation.sessionRoot);
     if (client) this.client = client;
     else {
       validateInstallation(installation);
-      this.client = new JiuwenProcessClient(commandFor(installation));
+      this.client = new JiuwenProcessClient(
+        commandFor(installation),
+        undefined,
+        undefined,
+        installation.sessionRoot,
+      );
     }
   }
 
@@ -30,7 +39,15 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
       id: "jiuwenswarm",
       contractVersion: "1",
       adapterVersion: `${JIUWENSWARM_SDK_VERSION}+${JIUWENSWARM_REVISION}`,
-      capabilities: { streaming: true, tools: true, compaction: false, scripted: false },
+      capabilities: {
+        streaming: true,
+        tools: true,
+        compaction: false,
+        scripted: false,
+        durableToolTracking: true,
+        requiresInvocationClaim: true,
+        persistentSessions: this.persistentSessions,
+      },
     };
   }
 
@@ -73,6 +90,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
       : controller.signal;
     if (signal.aborted) return;
     validateRequest(request);
+    const usageCallId = `${request.runId}:jiuwenswarm:${randomUUID()}`;
     const queue: AgentRuntimeEvent[] = [];
     let wake: (() => void) | undefined;
     let finished = false;
@@ -102,6 +120,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
         request,
         signal,
         hostTools: host.declarations,
+        wasPaused: () => paused,
         onToolCall: (event) => host.call(event),
         onInteraction: (event) => host.interaction(event),
         onEvent: (event) => {
@@ -117,7 +136,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
       })
       .then(async (result) => {
         // Account a terminal usage record even if cancellation won the race.
-        const usage = mapUsage(result, request);
+        const usage = mapUsage(result, request, usageCallId);
         await request.onUsage?.(usage);
         if (signal.aborted) return;
         if (result.status !== "completed" || result.exit_code !== 0 || result.error !== null)
@@ -129,9 +148,12 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
         emit({ ...usage, accounted: Boolean(request.onUsage) });
         emit({ type: "done", ...(result.output ? { text: result.output } : {}) });
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!signal.aborted)
-          failure = new Error("JiuwenSwarm run failed; no successful terminal result was accepted");
+          failure =
+            error instanceof RuntimeSessionBusyError
+              ? error
+              : new Error("JiuwenSwarm run failed; no successful terminal result was accepted");
       })
       .finally(() => {
         finished = true;
@@ -158,6 +180,16 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
 }
 
 function validateRequest(request: AgentRunRequest) {
+  for (const value of [request.model.maxTokens, request.model.contextWindow]) {
+    if (value != null && (!Number.isSafeInteger(value) || value < 1))
+      throw new Error("JiuwenSwarm token limits must be positive safe integers");
+  }
+  if (
+    request.model.maxTokens != null &&
+    request.model.contextWindow != null &&
+    request.model.maxTokens > request.model.contextWindow
+  )
+    throw new Error("JiuwenSwarm output limit exceeds the configured context window");
   if (
     request.model.provider !== "openai" ||
     !request.model.apiKey ||
