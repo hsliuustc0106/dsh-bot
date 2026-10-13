@@ -96,9 +96,59 @@ it.each([
   { resumeFromCheckpoint: "old" },
   { fallbackModels: [{ provider: "deepseek", id: "other" }] },
   { model: { provider: "other", id: "model" } },
-  { currentTurnImages: [{ name: "image", mimeType: "image/png" as const, data: new Uint8Array() }] },
+  {
+    currentTurnImages: [{ name: "image", mimeType: "image/png" as const, data: new Uint8Array() }],
+  },
 ])("rejects unsupported requests before execution: %j", async (patch) => {
   const executeTool = vi.fn();
   await expect(collect(request({ ...patch, executeTool }))).rejects.toThrow();
+  expect(executeTool).not.toHaveBeenCalled();
+});
+
+it("claims continuation steering once and includes it only in the current user turn", async () => {
+  const claimSteering = vi.fn(async () => [
+    {
+      id: "steering-1",
+      messageId: "follow-up",
+      text: "Read the second file",
+      historyText: "Read the second file",
+    },
+  ]);
+  const events = await collect(
+    request({
+      prompt: "inspect",
+      claimSteering,
+      history: [
+        { id: "original", role: "user", content: "Read the first file" },
+        { id: "answer", role: "assistant", content: "First answer" },
+        { id: "follow-up", role: "user", content: "Read the second file" },
+      ],
+    }),
+  );
+  const value = JSON.parse(
+    events
+      .filter((e) => e.type === "text")
+      .map((e) => e.text)
+      .join(""),
+  );
+  expect(claimSteering).toHaveBeenCalledExactlyOnceWith([]);
+  expect(value.prompt).toBe("inspect\n\nAdditional user context:\nRead the second file");
+  expect(value.history).toEqual([
+    { role: "user", content: "Read the first file" },
+    { role: "assistant", content: "First answer" },
+  ]);
+});
+it("fails before starting the model when claiming steering fails", async () => {
+  const executeTool = vi.fn();
+  await expect(
+    collect(
+      request({
+        executeTool,
+        claimSteering: async () => {
+          throw new Error("claim failed");
+        },
+      }),
+    ),
+  ).rejects.toThrow("claim failed");
   expect(executeTool).not.toHaveBeenCalled();
 });

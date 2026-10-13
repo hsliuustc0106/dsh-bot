@@ -47,11 +47,12 @@ input.on("line", (line) => {
   } else if (message.type === "proceed") {
     if (request.prompt === "crash") process.exit(9);
     send({ type: "started" });
-    if (request.prompt === "inspect") {
+    if (request.prompt.startsWith("inspect")) {
       send({
         type: "text",
         text: JSON.stringify({
           home: process.env.DSH_HOME,
+          prompt: request.prompt,
           history: request.history,
           tools: request.tools,
           inherited: ["DATABASE_URL", "NODE_OPTIONS", "HTTPS_PROXY"].some(
