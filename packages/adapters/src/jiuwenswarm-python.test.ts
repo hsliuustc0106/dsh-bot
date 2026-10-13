@@ -105,9 +105,11 @@ describePython.each(["jiuwenswarm", "pi"] as const)(
 );
 
 describePython("pinned Python host-tool round trip", () => {
-  it.each([false, true])(
-    "preserves host outcome uncertainty=%s",
-    async (uncertain) => {
+  it.each(["success", "uncertain", "approval", "secret", "question"] as const)(
+    "preserves host outcome %s",
+    async (outcome) => {
+      const uncertain = outcome === "uncertain";
+      const paused = ["approval", "secret", "question"].includes(outcome);
       let modelCalls = 0;
       const executed: unknown[][] = [];
       const audits: unknown[] = [];
@@ -132,7 +134,11 @@ describePython("pinned Python host-tool round trip", () => {
                     type: "function",
                     function: {
                       name: body.tools[0].function.name,
-                      arguments: JSON.stringify({ path: "fixture.txt" }),
+                      arguments: JSON.stringify(
+                        outcome === "question"
+                          ? { question: "Which fixture?", options: ["First", "Second"] }
+                          : { path: "fixture.txt" },
+                      ),
                     },
                   },
                 ],
@@ -185,19 +191,32 @@ describePython("pinned Python host-tool round trip", () => {
               },
               tools: [
                 {
-                  name: "files.read",
+                  name: outcome === "question" ? "ask_user" : "files.read",
                   description: "Read a fixture file",
                   inputSchema: {
                     type: "object",
-                    properties: { path: { type: "string" } },
-                    required: ["path"],
+                    properties:
+                      outcome === "question"
+                        ? {
+                            question: { type: "string" },
+                            options: { type: "array", items: { type: "string" } },
+                          }
+                        : { path: { type: "string" } },
+                    required: outcome === "question" ? ["question", "options"] : ["path"],
                   },
-                  route,
+                  ...(outcome === "question" ? {} : { route }),
                 },
               ],
               executeTool: async (...args) => {
                 executed.push(args);
                 if (uncertain) throw new Error("Fixture outcome is uncertain");
+                if (outcome === "approval" || outcome === "secret")
+                  return {
+                    kind: "agent_tool_result",
+                    content: [],
+                    details: { [outcome]: "paused" },
+                    terminate: true,
+                  };
                 return { content: "fixture-file-content" };
               },
               onToolCompleted: (completion) => {
@@ -210,15 +229,29 @@ describePython("pinned Python host-tool round trip", () => {
         };
         if (uncertain) await expect(collect()).rejects.toThrow("host callback failed");
         else await collect();
-        expect(executed).toHaveLength(1);
-        expect(executed[0]).toEqual([
-          "files.read",
-          { path: "fixture.txt" },
-          expect.any(String),
-          route,
-          { signal: expect.any(AbortSignal) },
-        ]);
-        if (uncertain) {
+        expect(executed).toHaveLength(outcome === "question" ? 0 : 1);
+        if (outcome !== "question")
+          expect(executed[0]).toEqual([
+            "files.read",
+            { path: "fixture.txt" },
+            expect.any(String),
+            route,
+            { signal: expect.any(AbortSignal) },
+          ]);
+        if (paused) {
+          expect(modelCalls).toBe(1);
+          expect(events.some((event) => event.type === "done")).toBe(false);
+          expect(audits).toEqual([expect.objectContaining({ paused: true })]);
+          if (outcome === "question")
+            expect(events).toContainEqual({
+              type: "ask",
+              text: "Which fixture?",
+              actions: [
+                { id: "choice-1", label: "First" },
+                { id: "choice-2", label: "Second" },
+              ],
+            });
+        } else if (uncertain) {
           expect(modelCalls).toBe(1);
           expect(events.some((event) => event.type === "done")).toBe(false);
           expect(audits).toEqual([

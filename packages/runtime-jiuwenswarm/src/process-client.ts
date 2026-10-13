@@ -193,7 +193,13 @@ export class JiuwenProcessClient implements ProcessClient {
       const previous = readSessionCheckpoint(session?.checkpoint);
       const seen = new Set(previous?.historyKeys ?? []);
       const history = withoutSteeringMessages(request.history, steering).filter(
-        (message) => !seen.has(historyKey(message)),
+        (message) =>
+          !seen.has(historyKey(message)) &&
+          !(
+            message.role === "user" &&
+            request.sourceMessageId &&
+            message.id === request.sourceMessageId
+          ),
       );
       const historyKeys = [
         ...new Set([

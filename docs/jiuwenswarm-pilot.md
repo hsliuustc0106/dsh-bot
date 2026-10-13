@@ -87,4 +87,10 @@ usage and either trusted cost provenance or an explicit unknown cost.
 
 The opt-in Python tests use a local model emulator to test the harness and actual
 adapter protocols. They cannot satisfy live model quality or selected-bot gates.
+They also verify signal cancellation, explicit abort and consumer disconnect with
+an outstanding model stream; cleanup must finish within five seconds without a
+successful terminal. An outstanding host action may settle after process cleanup,
+with one audit and no model retry. Approval, protected-input and question pauses
+stop the real process before a second model call. These establish adapter protocol
+behavior, not production authorization or remote-action reconciliation.
 Team mode remains disabled and is covered by later PRs.
