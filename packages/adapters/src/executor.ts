@@ -31,6 +31,7 @@ import {
   DEFAULT_CONTEXT_STRATEGY,
   historyCompactJob,
   MEMORY_REVISION_CONFLICT_ERROR,
+  RuntimeSessionBusyError,
   routineJobKey,
   routineWakeupJob,
   runContinueJob,
@@ -316,6 +317,7 @@ import {
   tryCompleteConnectionWithCode,
 } from "./run-secret.js";
 import { recordRuntimeIdentity } from "./runtime-identity.js";
+import { createRuntimeSessionCoordinator } from "./runtime-session.js";
 import { withRuntimeCleanup } from "./runtime-stream.js";
 import { createRuntimeToolLedger } from "./runtime-tool-ledger.js";
 import {
@@ -6516,6 +6518,18 @@ export function createRunExecutor(deps: ExecutorDeps) {
               threadId: thread.id,
               runId,
               sourceMessageId: run.sourceMessageId,
+              runtimeSession: deps.runtime.describe({ botId: bot.id }).capabilities
+                .persistentSessions
+                ? createRuntimeSessionCoordinator(deps.prisma, {
+                    runId,
+                    botId: bot.id,
+                    threadId: thread.id,
+                    spaceId: run.spaceId,
+                    workerId,
+                    fence,
+                    runtimeId: deps.runtime.describe({ botId: bot.id }).id,
+                  })
+                : undefined,
               onUsage: async (event) => {
                 await recordUsage(deps.prisma, event, {
                   spaceId: run.spaceId,
@@ -7209,6 +7223,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             getLogger().error("history.compact enqueue failed", error);
           }
         } catch (error) {
+          if (error instanceof RuntimeSessionBusyError) throw error;
           if (!terminalCheckpointComplete) {
             await workspaceCheckpoint.flush().catch(() => undefined);
           }
@@ -7261,7 +7276,8 @@ export function createRunExecutor(deps: ExecutorDeps) {
           });
         }
       } catch (setupError) {
-        const computerBusy = setupError instanceof ComputerBusyError;
+        const computerBusy =
+          setupError instanceof ComputerBusyError || setupError instanceof RuntimeSessionBusyError;
         const retryForever = computerBusy || isTooManyDatabaseConnections(setupError);
         if (!computerBusy) {
           // undici collapses every network failure to "fetch failed"; the cause names the

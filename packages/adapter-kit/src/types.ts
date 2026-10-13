@@ -494,6 +494,7 @@ export interface AgentRunRequest {
   onToolCompleted?: (completion: AgentToolCompletion) => Promise<void> | void;
   /** Atomically claim durable user steering at the runtime's next safe turn boundary. */
   claimSteering?: (seenIds: string[]) => Promise<AgentSteeringMessage[]>;
+  runtimeSession?: RuntimeSessionCoordinator;
 }
 
 export interface ScriptedTurn {
@@ -580,6 +581,7 @@ export interface AgentRuntimeCapabilities {
   durableToolTracking?: boolean;
   /** A worker restart must not replay a model invocation without fresh user input. */
   requiresInvocationClaim?: boolean;
+  persistentSessions?: boolean;
   streaming: boolean;
   compaction: boolean;
   tools: boolean;
@@ -1035,4 +1037,13 @@ export interface BillingCheckoutRequest {
   trialDays?: number;
   successUrl: string;
   cancelUrl: string;
+}
+
+/** Backend-owned ownership and checkpoint persistence for a process runtime. */
+export interface RuntimeSessionCoordinator {
+  acquire(definition: string): Promise<{
+    storageKey: string;
+    checkpoint: string | null;
+    finish(outcome: "completed" | "paused" | "interrupted", checkpoint?: string): Promise<void>;
+  }>;
 }

@@ -1,8 +1,14 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentRunRequest, AgentRuntimeEvent } from "@rakazo/adapter-kit";
+import type {
+  AgentRunRequest,
+  AgentRuntimeEvent,
+  RuntimeSessionCoordinator,
+} from "@rakazo/adapter-kit";
+import { RuntimeSessionBusyError } from "@rakazo/adapter-kit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { JiuwenProcessClient, validateInstallation } from "./process-client.js";
 import { JiuwenSwarmRuntime } from "./runtime.js";
@@ -20,11 +26,16 @@ const request = (): AgentRunRequest => ({
   tools: [],
   model: { provider: "openai", id: "test-model", apiKey: "fake-test-key" },
 });
-function runtime(mode = "success", deadline = 2000) {
+function runtime(mode = "success", deadline = 2000, persistent = false) {
   const root = mkdtempSync(join(tmpdir(), "jiuwen-test-"));
   directories.push(root);
   const marker = join(root, "marker.json");
-  const client = new JiuwenProcessClient([process.execPath, fixture, mode, marker], deadline, 50);
+  const client = new JiuwenProcessClient(
+    [process.execPath, fixture, mode, marker],
+    deadline,
+    50,
+    persistent ? join(root, "sessions") : undefined,
+  );
   return { runtime: new JiuwenSwarmRuntime({ pythonPath: "", sourceDir: "" }, client), marker };
 }
 async function collect(events: AsyncIterable<AgentRuntimeEvent>) {
@@ -147,6 +158,110 @@ describe("JiuwenSwarm real process boundary", () => {
     ).rejects.toThrow("no successful terminal");
     expect(existsSync(marker)).toBe(false);
   });
+
+  it("resumes a persistent session with only newly arrived history", async () => {
+    const { runtime: agent, marker } = runtime("success", 2000, true);
+    let checkpoint: string | null = null;
+    const storageKey = randomUUID();
+    const finish = vi.fn(async (_outcome: string, value?: string) => {
+      checkpoint = value ?? null;
+    });
+    const runtimeSession: RuntimeSessionCoordinator = {
+      acquire: async () => ({ storageKey, checkpoint, finish }),
+    };
+    const history: AgentRunRequest["history"] = [{ id: "old", role: "user", content: "Earlier" }];
+    await collect(agent.run({ ...request(), history, runtimeSession }));
+    const first = JSON.parse(readFileSync(marker, "utf8"));
+    expect(first.request.session_id).toBeUndefined();
+    expect(JSON.parse(first.request.input).history).toEqual(history);
+    expect(existsSync(first.request.workspace.cwd)).toBe(true);
+    expect(existsSync(first.cwd)).toBe(false);
+    const added = { id: "new", role: "user" as const, content: "New context" };
+    await collect(
+      agent.run({ ...request(), runId: "next-run", history: [...history, added], runtimeSession }),
+    );
+    const second = JSON.parse(readFileSync(marker, "utf8"));
+    expect(second.request.session_id).toBe("session");
+    expect(second.request.workspace).toEqual(first.request.workspace);
+    expect(JSON.parse(second.request.input).history).toEqual([added]);
+    expect(finish).toHaveBeenCalledTimes(2);
+    expect(finish.mock.calls.every(([outcome]) => outcome === "completed")).toBe(true);
+  });
+
+  it("preserves a safe busy-acquisition error and never launches", async () => {
+    const { runtime: agent, marker } = runtime("success", 2000, true);
+    const runtimeSession: RuntimeSessionCoordinator = {
+      acquire: async () => {
+        throw new RuntimeSessionBusyError();
+      },
+    };
+    await expect(collect(agent.run({ ...request(), runtimeSession }))).rejects.toBeInstanceOf(
+      RuntimeSessionBusyError,
+    );
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("marks a cancelled persistent session interrupted after child cleanup", async () => {
+    const { runtime: agent, marker } = runtime("cancel", 2000, true);
+    const finish = vi.fn(async () => {
+      const child = JSON.parse(readFileSync(marker, "utf8"));
+      expect(() => process.kill(child.pid, 0)).toThrow();
+      expect(existsSync(child.cwd)).toBe(false);
+    });
+    const runtimeSession: RuntimeSessionCoordinator = {
+      acquire: async () => ({ storageKey: randomUUID(), checkpoint: null, finish }),
+    };
+    const iterator = agent.run({ ...request(), runtimeSession });
+    await iterator.next();
+    await iterator.return!();
+    expect(finish).toHaveBeenCalledExactlyOnceWith("interrupted", undefined);
+  });
+
+  it("does not retry upstream SESSION_BUSY or report success", async () => {
+    const { runtime: agent, marker } = runtime("session-busy", 2000, true);
+    const finish = vi.fn(async () => {});
+    const acquire = vi.fn(async () => ({ storageKey: randomUUID(), checkpoint: null, finish }));
+    await expect(collect(agent.run({ ...request(), runtimeSession: { acquire } }))).rejects.toThrow(
+      "no successful terminal",
+    );
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(finish).toHaveBeenCalledExactlyOnceWith("interrupted", undefined);
+    expect(existsSync(JSON.parse(readFileSync(marker, "utf8")).cwd)).toBe(false);
+  });
+
+  it.each(["host-pause", "host-question"])(
+    "releases %s only after cancelled child cleanup",
+    async (mode) => {
+      const { runtime: agent, marker } = runtime(mode, 2000, true);
+      const finish = vi.fn(async () => {
+        const child = JSON.parse(readFileSync(marker, "utf8"));
+        expect(() => process.kill(child.pid, 0)).toThrow();
+      });
+      const events = await collect(
+        agent.run({
+          ...request(),
+          runtimeSession: {
+            acquire: async () => ({ storageKey: randomUUID(), checkpoint: null, finish }),
+          },
+          tools: [
+            {
+              name: mode === "host-question" ? "ask_user" : "read_file",
+              description: "test",
+              inputSchema: { type: "object" },
+            },
+          ],
+          executeTool: async () => ({
+            kind: "agent_tool_result",
+            content: [],
+            details: { approval: "paused" },
+            terminate: true,
+          }),
+        }),
+      );
+      expect(events.some((event) => event.type === "done")).toBe(false);
+      expect(finish).toHaveBeenCalledExactlyOnceWith("paused", undefined);
+    },
+  );
 
   it.each([
     "malformed",

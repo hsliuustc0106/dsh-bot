@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type { AgentRuntime } from "@rakazo/adapter-kit";
 import { JiuwenSwarmRuntime } from "@rakazo/runtime-jiuwenswarm";
 import { PiAgentRuntime } from "./pi-runtime.js";
@@ -76,7 +76,11 @@ export function createAgentRuntime(
   createDsh?: (options: NonNullable<AgentRuntimeOptions["dsh"]>) => AgentRuntime,
   createJiuwen: (options: NonNullable<AgentRuntimeOptions["jiuwenswarm"]>) => AgentRuntime = (
     config,
-  ) => new JiuwenSwarmRuntime(config),
+  ) =>
+    new JiuwenSwarmRuntime({
+      ...config,
+      sessionRoot: resolve(options.dataDir ?? "./data", "jiuwenswarm"),
+    }),
 ): AgentRuntime {
   const kind = resolveAgentRuntimeKind(options.kind);
   if (kind === "scripted") return new ScriptedAgentRuntime();

@@ -435,6 +435,7 @@ model Bot {
   artifacts         Artifact[]
   tasks             Task[]
   runs              Run[]
+  runtimeSessions   RuntimeConversation[]
   steeringMessages  SteeringMessage[]
   mcpServers        BotMcpServer[]
   groupMembers      ChatGroupMember[]
@@ -541,6 +542,7 @@ model Thread {
   tasks                       Task[]
   runs                        Run[]
   routines                    Routine[]
+  runtimeSessions             RuntimeConversation[]
 
   @@index([spaceId])
   @@map("threads")
@@ -1479,4 +1481,21 @@ model TicketComment {
 
   @@index([ticketId, createdAt])
   @@map("ticket_comments")
+}
+
+model RuntimeConversation {
+  id String @id @default(cuid())
+  threadId String
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  botId String
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  runtimeId String
+  definition String
+  storageKey String
+  checkpoint String?
+  status String @default("ready")
+  activeToken String?
+  acquiredAt DateTime?
+  @@unique([threadId, botId, runtimeId])
+  @@map("runtime_conversations")
 }

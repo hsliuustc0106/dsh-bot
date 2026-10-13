@@ -3,6 +3,7 @@ import type { PrismaClient } from "@rakazo/db";
 import { answerRunInput, createDb } from "@rakazo/db";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { claimRuntimeInvocation } from "./runtime-identity.js";
+import { createRuntimeSessionCoordinator } from "./runtime-session.js";
 import { createRuntimeToolLedger, reconcileRuntimeToolLedger } from "./runtime-tool-ledger.js";
 
 const describePostgres =
@@ -220,6 +221,153 @@ describePostgres("runtime recovery with PostgreSQL", () => {
       "completed",
     );
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes session turns without consuming a busy invocation, and fences late cleanup", async () => {
+    const f = await setup();
+    const coordinator = createRuntimeSessionCoordinator(prisma, {
+      ...f.target,
+      threadId: f.run.threadId,
+      runtimeId: "test",
+    });
+    const first = await coordinator.acquire("definition");
+    await expect(coordinator.acquire("definition")).rejects.toThrow("session is busy");
+    expect(
+      await prisma.externalEffect.count({ where: { runId: f.run.id, kind: "runtime_invocation" } }),
+    ).toBe(1);
+    await first.finish("completed", "checkpoint");
+    await expect(coordinator.acquire("definition")).rejects.toThrow("cannot be replayed");
+    await prisma.run.update({
+      where: { id: f.run.id },
+      data: { runtimeInputGeneration: { increment: 1 } },
+    });
+    const next = await coordinator.acquire("definition");
+    expect(next.storageKey).toBe(first.storageKey);
+    expect(next.checkpoint).toBe("checkpoint");
+    await expect(first.finish("interrupted")).rejects.toThrow("ownership was lost");
+    await next.finish("completed", "next-checkpoint");
+  });
+
+  it("rotates storage after definition changes, history clearing, and answered pauses", async () => {
+    const f = await setup();
+    const coordinator = createRuntimeSessionCoordinator(prisma, {
+      ...f.target,
+      threadId: f.run.threadId,
+      runtimeId: "test",
+    });
+    const first = await coordinator.acquire("definition");
+    await first.finish("completed", "checkpoint");
+    const advance = () =>
+      prisma.run.update({
+        where: { id: f.run.id },
+        data: { runtimeInputGeneration: { increment: 1 } },
+      });
+    await advance();
+    const changed = await coordinator.acquire("changed-definition");
+    expect(changed.storageKey).not.toBe(first.storageKey);
+    expect(changed.checkpoint).toBeNull();
+    await changed.finish("completed", "checkpoint");
+    await prisma.thread.update({
+      where: { id: f.run.threadId },
+      data: { historyCompactionGeneration: { increment: 1 } },
+    });
+    await advance();
+    const cleared = await coordinator.acquire("changed-definition");
+    expect(cleared.storageKey).not.toBe(changed.storageKey);
+    expect(cleared.checkpoint).toBeNull();
+    await cleared.finish("paused");
+    await advance();
+    const answered = await coordinator.acquire("changed-definition");
+    expect(answered.storageKey).not.toBe(cleared.storageKey);
+    expect(answered.checkpoint).toBeNull();
+    await answered.finish("completed", "checkpoint");
+  });
+
+  it("never steals an abandoned session after its bounded cleanup window", async () => {
+    const f = await setup();
+    const coordinator = createRuntimeSessionCoordinator(prisma, {
+      ...f.target,
+      threadId: f.run.threadId,
+      runtimeId: "test",
+    });
+    await coordinator.acquire("definition");
+    await prisma.runtimeConversation.updateMany({
+      where: { threadId: f.run.threadId },
+      data: { acquiredAt: new Date(0) },
+    });
+    await expect(coordinator.acquire("definition")).rejects.toThrow("requires reconciliation");
+    expect(
+      await prisma.externalEffect.count({ where: { runId: f.run.id, kind: "runtime_invocation" } }),
+    ).toBe(1);
+  });
+
+  it("never replays an interrupted invocation; fresh user input starts a new session after cleanup", async () => {
+    const f = await setup();
+    const target = { ...f.target, threadId: f.run.threadId, runtimeId: "test" };
+    const coordinator = createRuntimeSessionCoordinator(prisma, target);
+    const lease = await coordinator.acquire("definition");
+    await lease.finish("interrupted");
+    await expect(coordinator.acquire("definition")).rejects.toThrow("cannot be replayed");
+    const nextRun = await prisma.run.create({
+      data: {
+        spaceId: f.id,
+        userId: f.id,
+        botId: f.run.botId,
+        threadId: f.run.threadId,
+        taskId: f.run.taskId,
+        status: "running",
+        trigger: "user",
+        leaseOwner: "worker",
+        leaseFence: 1,
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    const fresh = await createRuntimeSessionCoordinator(prisma, {
+      ...target,
+      runId: nextRun.id,
+    }).acquire("definition");
+    expect(fresh.storageKey).not.toBe(lease.storageKey);
+    expect(fresh.checkpoint).toBeNull();
+    await fresh.finish("completed", "checkpoint");
+  });
+
+  it("isolates routine context from a prior conversation checkpoint", async () => {
+    const f = await setup();
+    const target = { ...f.target, threadId: f.run.threadId, runtimeId: "test" };
+    const coordinator = createRuntimeSessionCoordinator(prisma, target);
+    const first = await coordinator.acquire("definition");
+    await first.finish("completed", "conversation-checkpoint");
+    await prisma.run.update({
+      where: { id: f.run.id },
+      data: { trigger: "routine", runtimeInputGeneration: { increment: 1 } },
+    });
+    const routine = await coordinator.acquire("definition");
+    expect(routine.checkpoint).toBeNull();
+    expect(routine.storageKey).not.toBe(first.storageKey);
+    await routine.finish("completed", "routine-checkpoint");
+  });
+
+  it("blocks session acquisition while an earlier conversation action is uncertain", async () => {
+    const f = await setup();
+    await prisma.externalEffect.create({
+      data: {
+        runId: f.run.id,
+        spaceId: f.id,
+        kind: "runtime_host_tool",
+        status: "uncertain",
+        idempotencyKey: randomUUID(),
+        request: { name: "write", fence: 1 },
+      },
+    });
+    const coordinator = createRuntimeSessionCoordinator(prisma, {
+      ...f.target,
+      threadId: f.run.threadId,
+      runtimeId: "test",
+    });
+    await expect(coordinator.acquire("definition")).rejects.toThrow("requires reconciliation");
+    expect(
+      await prisma.externalEffect.count({ where: { runId: f.run.id, kind: "runtime_invocation" } }),
+    ).toBe(0);
   });
 
   it("does not dispatch after lease loss or in a foreign space", async () => {

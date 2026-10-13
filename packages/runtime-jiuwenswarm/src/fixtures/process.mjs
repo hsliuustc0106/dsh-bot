@@ -23,7 +23,7 @@ const finish = (code = 0) => {
     type: "result",
     status: code ? "failed" : "completed",
     exit_code: code,
-    error: code ? { code: "FAILED", message: "fixture failure" } : null,
+    error: code ? { code: mode === "session-busy" ? "SESSION_BUSY" : "FAILED", message: "fixture failure" } : null,
     output: "hello",
     output_json: null,
     usage: {},
@@ -104,5 +104,5 @@ lines.on("line", (line) => {
     });
     process.exit(1);
   }
-  finish(mode === "failed" ? 1 : 0);
+  finish(mode === "failed" || mode === "session-busy" ? 1 : 0);
 });

@@ -4,6 +4,7 @@ import type {
   AgentRuntime,
   AgentRuntimeEvent,
 } from "@rakazo/adapter-kit";
+import { RuntimeSessionBusyError } from "@rakazo/adapter-kit";
 import { mapEvent, mapUsage } from "./event-mapping.js";
 import { HostTools } from "./host-tools.js";
 import type { Installation, ProcessClient } from "./process-client.js";
@@ -16,12 +17,19 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
     { controller: AbortController; work: Promise<void> }
   >();
   private readonly client: ProcessClient;
+  private readonly persistentSessions: boolean;
 
   constructor(installation: Installation, client?: ProcessClient) {
+    this.persistentSessions = Boolean(installation.sessionRoot);
     if (client) this.client = client;
     else {
       validateInstallation(installation);
-      this.client = new JiuwenProcessClient(commandFor(installation));
+      this.client = new JiuwenProcessClient(
+        commandFor(installation),
+        undefined,
+        undefined,
+        installation.sessionRoot,
+      );
     }
   }
 
@@ -37,6 +45,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
         scripted: false,
         durableToolTracking: true,
         requiresInvocationClaim: true,
+        persistentSessions: this.persistentSessions,
       },
     };
   }
@@ -109,6 +118,7 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
         request,
         signal,
         hostTools: host.declarations,
+        wasPaused: () => paused,
         onToolCall: (event) => host.call(event),
         onInteraction: (event) => host.interaction(event),
         onEvent: (event) => {
@@ -136,9 +146,12 @@ export class JiuwenSwarmRuntime implements AgentRuntime {
         emit({ ...usage, accounted: Boolean(request.onUsage) });
         emit({ type: "done", ...(result.output ? { text: result.output } : {}) });
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!signal.aborted)
-          failure = new Error("JiuwenSwarm run failed; no successful terminal result was accepted");
+          failure =
+            error instanceof RuntimeSessionBusyError
+              ? error
+              : new Error("JiuwenSwarm run failed; no successful terminal result was accepted");
       })
       .finally(() => {
         finished = true;
