@@ -910,6 +910,9 @@ importers:
       '@rakazo/db':
         specifier: workspace:*
         version: link:../db
+      '@rakazo/runtime-dsh':
+        specifier: workspace:*
+        version: link:../runtime-dsh
       '@testcontainers/postgresql':
         specifier: 12.1.0
         version: 12.1.0

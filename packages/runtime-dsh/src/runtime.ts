@@ -11,16 +11,19 @@ import { DshBridge } from "./bridge.js";
 import { validateDshInstallation } from "./profile.js";
 
 const readOnlyTools = new Set(["read_file", "list_files"]);
+const disposablePilotTools = new Set([...readOnlyTools, "write_file", "run_tests"]);
 
 export class DshAgentRuntime implements AgentRuntime {
   private readonly bridge: DshBridge;
+  private readonly pilot: boolean;
   private readonly running = new Map<
     string,
     { controller: AbortController; work: Promise<void> }
   >();
 
-  constructor(options: { cliPath: string }) {
+  constructor(options: { cliPath: string; toolAccess?: "read-only" | "disposable-pilot" }) {
     this.bridge = new DshBridge({ cliPath: validateDshInstallation(options.cliPath) });
+    this.pilot = options.toolAccess === "disposable-pilot";
   }
 
   describe() {
@@ -114,7 +117,10 @@ export class DshAgentRuntime implements AgentRuntime {
           },
           tools: request.tools
             .filter(
-              (tool) => readOnlyTools.has(tool.name) && !tool.route && tool.readOnly !== false,
+              (tool) =>
+                (this.pilot ? disposablePilotTools : readOnlyTools).has(tool.name) &&
+                !tool.route &&
+                (this.pilot || tool.readOnly !== false),
             )
             .map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
         },
